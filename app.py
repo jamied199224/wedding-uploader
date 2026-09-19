@@ -14,10 +14,14 @@ st.set_page_config(
 # --- TARGET GOOGLE DRIVE FOLDER ID ---
 TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
+# --- INITIALIZE SESSION STATE FOR DEVICE TRACKING ---
+if 'my_uploads' not in st.session_state:
+    st.session_state.my_uploads = []  # Tracks file IDs uploaded by *this specific device session*
+
 # --- PERSONAL TOUCH: PHOTO & TITLE ---
 # st.image("millie_and_jamie.jpg", width=300) 
 st.title("💍 Jamie & Millie's Wedding Album")
-st.write("Welcome! Please share your favorite photos and videos from our special day with us, and browse memories uploaded so far.")
+st.write("Welcome! Please share your favorite photos and videos from our special day with us, and manage your uploads.")
 
 # --- GOOGLE API AUTHENTICATION ---
 @st.cache_resource
@@ -40,7 +44,7 @@ def get_google_services():
 drive_service, sheets_service = get_google_services()
 
 # --- TAB LAYOUT: UPLOAD VS. GALLERY ---
-tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Guest Gallery"])
+tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Guest Gallery & Management"])
 
 with tab1:
     st.header("Upload Photos & Videos")
@@ -83,6 +87,11 @@ with tab1:
                             fields='id, webViewLink'
                         ).execute()
                         
+                        file_id = file.get('id')
+                        # Track this file ID so *this device* can manage/delete it later
+                        if file_id not in st.session_state.my_uploads:
+                            st.session_state.my_uploads.append(file_id)
+                            
                         success_count += 1
                     except Exception as e:
                         failed_files.append((uploaded_file.name, str(e)))
@@ -101,17 +110,15 @@ with tab1:
                         st.text(f"- {fname}: {err}")
 
 with tab2:
-    st.header("Wedding Gallery")
-    st.write("Browse through memories shared by family and friends:")
+    st.header("Wedding Gallery & Device Management")
+    st.write("Browse memories shared by everyone. You can multi-select files *you* uploaded from this device to delete or view.")
     
     if drive_service:
         try:
-            # Limited page size (12 items) to prevent connection timeouts/broken pipes
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
-            
             results = drive_service.files().list(
                 q=query,
-                pageSize=12,
+                pageSize=20,
                 fields="files(id, name, webViewLink, mimeType)",
                 orderBy="createdTime desc"
             ).execute()
@@ -120,21 +127,48 @@ with tab2:
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
+                # Multi-select action container for device owner's files
+                my_device_files = [f for f in files if f['id'] in st.session_state.my_uploads]
+                
+                if my_device_files:
+                    st.subheader("🗑️ Manage Your Device Uploads")
+                    st.write("Select from the files you've uploaded during this session:")
+                    
+                    selected_to_delete = []
+                    for file in my_device_files:
+                        if st.checkbox(f"Select to delete: {file.get('name')}", key=f"del_{file['id']}"):
+                            selected_to_delete.append(file['id'])
+                    
+                    if selected_to_delete:
+                        if st.button("Delete Selected From Drive"):
+                            with st.spinner("Removing selected files..."):
+                                for file_id in selected_to_delete:
+                                    try:
+                                        drive_service.files().delete(fileId=file_id).execute()
+                                        st.session_state.my_uploads.remove(file_id)
+                                    except Exception as e:
+                                        st.error(f"Could not delete file: {e}")
+                                st.success("Selected files removed successfully!")
+                                st.rerun()
+                    st.divider()
+
+                st.subheader("All Guest Memories")
                 cols = st.columns(2)
                 for idx, file in enumerate(files):
                     col = cols[idx % 2]
                     with col:
                         file_name = file.get('name', 'Memory')
                         mime_type = file.get('mimeType', '')
+                        is_mine = file['id'] in st.session_state.my_uploads
                         
-                        st.write(f"**{file_name}**")
+                        st.write(f"**{file_name}** {'*(Your Upload)*' if is_mine else ''}")
+                        
                         if 'image' in mime_type:
                             st.info("📷 Photo File")
                         elif 'video' in mime_type:
                             st.info("🎥 Video File")
                         
-                        # Direct secure link prevents heavy streaming crashes
-                        st.markdown(f"[Open / Download Memory]({file.get('webViewLink')})", unsafe_allow_html=True)
+                        st.markdown(f"[Open / Download]({file.get('webViewLink')})", unsafe_allow_html=True)
                         st.divider()
         except Exception as e:
             st.error(f"Could not load gallery: {e}")

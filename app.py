@@ -20,13 +20,17 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
 
-# --- CUSTOM CSS: FORCE EXACTLY 3 COLUMNS ON PHONES & GOOGLE PHOTOS STYLE ---
+# --- CUSTOM CSS: FORCE STRICTLY 3 COLUMNS ACROSS ALL MOBILE SCREENS ---
 st.markdown("""
 <style>
+    /* Force Streamlit horizontal blocks and columns to stay side-by-side on mobile */
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap !important;
+    }
     [data-testid="column"] {
         width: 33.333% !important;
         flex: 1 1 33.333% !important;
-        min-width: 33.333% !important;
+        min-width: 0 !important;
         padding: 2px !important;
     }
     .photo-card {
@@ -52,7 +56,7 @@ st.markdown("""
         height: 100%;
         background: #222;
         color: white;
-        font-size: 18px;
+        font-size: 16px;
         border-radius: 4px;
     }
 </style>
@@ -156,15 +160,21 @@ with tab2:
         try:
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
             
-            # Attempt to fetch files and expose any specific error message
-            results = drive_service.files().list(
-                q=query,
-                pageSize=100,
-                fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
-                orderBy="createdTime desc"
-            ).execute()
+            results = None
+            for attempt in range(3):
+                try:
+                    results = drive_service.files().list(
+                        q=query,
+                        pageSize=100,
+                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
+                        orderBy="createdTime desc"
+                    ).execute()
+                    break
+                except (ssl.SSLError, socket.timeout, Exception) as net_err:
+                    if attempt == 2:
+                        raise net_err
             
-            files = results.get('files', []) if results else []
+            files = results.get('files', []) if files else []
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
@@ -192,57 +202,59 @@ with tab2:
                             st.success("Downloading straight to your device folder...")
                     st.markdown("---")
 
-                # --- 3-COLUMN UNIFORM GOOGLE PHOTOS GRID ---
-                grid_cols = st.columns(3)
-                for idx, file in enumerate(files):
-                    g_col = grid_cols[idx % 3]
-                    with g_col:
-                        try:
-                            file_id = file.get('id')
-                            mime_type = file.get('mimeType', '')
-                            thumb_link = file.get('thumbnailLink')
-                            web_link = file.get('webViewLink', '#')
-                            is_mine = file_id in st.session_state.my_uploads
-                            
-                            if 'image' in mime_type and thumb_link:
-                                img_src = thumb_link.replace('=s220', '=s600')
-                                thumbnail_html = f'''
-                                <div class="photo-card">
-                                    <a href="{web_link}" target="_blank">
-                                        <img src="{img_src}" alt="Memory">
-                                    </a>
-                                </div>
-                                '''
-                            else:
-                                thumbnail_html = f'''
-                                <div class="photo-card">
-                                    <a href="{web_link}" target="_blank" style="text-decoration:none;">
-                                        <div class="video-badge">▶ Video</div>
-                                    </a>
-                                </div>
-                                '''
-                            
-                            st.markdown(thumbnail_html, unsafe_allow_html=True)
-                            
-                            act_c1, act_c2 = st.columns([0.7, 0.3])
-                            with act_c1:
-                                st.checkbox("Select", key=f"sel_{file_id}", label_visibility="collapsed")
-                            with act_c2:
-                                if is_mine:
-                                    if st.button("❌", key=f"del_{file_id}", help="Delete your upload"):
-                                        for del_attempt in range(3):
-                                            try:
-                                                drive_service.files().delete(fileId=file_id).execute()
-                                                break
-                                            except Exception:
-                                                if del_attempt == 2:
-                                                    raise
-                                        if file_id in st.session_state.my_uploads:
-                                            st.session_state.my_uploads.remove(file_id)
-                                        st.rerun()
+                # --- TRUE CHUNKED 3-COLUMN GRID ---
+                for i in range(0, len(files), 3):
+                    row_files = files[i:i+3]
+                    cols = st.columns(3)
+                    
+                    for idx, file in enumerate(row_files):
+                        with cols[idx]:
+                            try:
+                                file_id = file.get('id')
+                                mime_type = file.get('mimeType', '')
+                                thumb_link = file.get('thumbnailLink')
+                                web_link = file.get('webViewLink', '#')
+                                is_mine = file_id in st.session_state.my_uploads
+                                
+                                if 'image' in mime_type and thumb_link:
+                                    img_src = thumb_link.replace('=s220', '=s600')
+                                    thumbnail_html = f'''
+                                    <div class="photo-card">
+                                        <a href="{web_link}" target="_blank">
+                                            <img src="{img_src}" alt="Memory">
+                                        </a>
+                                    </div>
+                                    '''
+                                else:
+                                    thumbnail_html = f'''
+                                    <div class="photo-card">
+                                        <a href="{web_link}" target="_blank" style="text-decoration:none;">
+                                            <div class="video-badge">▶ Video</div>
+                                        </a>
+                                    </div>
+                                    '''
+                                
+                                st.markdown(thumbnail_html, unsafe_allow_html=True)
+                                
+                                act_c1, act_c2 = st.columns([0.7, 0.3])
+                                with act_c1:
+                                    st.checkbox("Select", key=f"sel_{file_id}", label_visibility="collapsed")
+                                with act_c2:
+                                    if is_mine:
+                                        if st.button("❌", key=f"del_{file_id}", help="Delete your upload"):
+                                            for del_attempt in range(3):
+                                                try:
+                                                    drive_service.files().delete(fileId=file_id).execute()
+                                                    break
+                                                except Exception:
+                                                    if del_attempt == 2:
+                                                        raise
+                                            if file_id in st.session_state.my_uploads:
+                                                st.session_state.my_uploads.remove(file_id)
+                                            st.rerun()
 
-                        except Exception:
-                            pass
+                            except Exception:
+                                pass
 
         except Exception as e:
             st.error(f"Google Drive Error: {e}")

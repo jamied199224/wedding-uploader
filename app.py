@@ -233,9 +233,6 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
 drive_service, sheets_service = get_google_services()
 spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, TARGET_FOLDER_ID) if (drive_service and sheets_service) else None
 
-if drive_service and sheets_service and not spreadsheet_id:
-    st.warning("⚠️ Warning: Could not locate or create 'wedding_likes_db' Google Sheet in the target folder. Likes may not persist.")
-
 # --- HANDLE QUERY PARAMS (Delete, Like, & ZIP actions) ---
 params = st.query_params
 del_id = params.get("delete_id")

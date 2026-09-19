@@ -54,15 +54,11 @@ st.markdown("""
         width: 100%;
         margin-bottom: 20px;
     }
-    .photo-card-wrapper {
-        background: #111;
-        border-radius: 4px;
-        overflow: hidden;
-        margin-bottom: 8px;
-    }
     .photo-card {
         position: relative;
         background-color: #111;
+        border-radius: 4px;
+        overflow: hidden;
         aspect-ratio: 1 / 1;
         width: 100%;
     }
@@ -106,13 +102,6 @@ st.markdown("""
         width: 100%;
         height: 100%;
         z-index: 5;
-    }
-    .card-footer {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 4px 6px;
-        background: #1a1a1a;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -228,12 +217,12 @@ with tab2:
                         raise net_err
                     time.sleep(1)
             
-            files = results.get('files', []) if files else []
+            # Fixed variable reference here:
+            files = results.get('files', []) if results else []
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                # Track active selections for batch download
                 active_selected_links = []
                 
                 # Render grid

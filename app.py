@@ -15,12 +15,11 @@ def init_connections():
         "https://www.googleapis.com/auth/drive"
     ]
     
-    creds_dict = dict(st.secrets["GOOGLE_CREDENTIALS_JSON"])
+    # This securely pulls the TOML data you pasted in the Streamlit UI
+    creds_dict = dict(st.secrets)
     
     if "private_key" in creds_dict:
-        # Normalize Windows line endings and unescape literal backslash-n sequences
-        private_key = creds_dict["private_key"].replace("\r\n", "\n").replace("\\n", "\n")
-        creds_dict["private_key"] = private_key
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     gc = gspread.authorize(creds)

@@ -233,6 +233,9 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
 drive_service, sheets_service = get_google_services()
 spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, TARGET_FOLDER_ID) if (drive_service and sheets_service) else None
 
+if drive_service and sheets_service and not spreadsheet_id:
+    st.warning("⚠️ Warning: Could not locate or create 'wedding_likes_db' Google Sheet in the target folder. Likes may not persist.")
+
 # --- HANDLE QUERY PARAMS (Delete, Like, & ZIP actions) ---
 params = st.query_params
 del_id = params.get("delete_id")
@@ -690,15 +693,12 @@ with tab2:
                         function navigateTop(queryString) {{
                             try {{
                                 const topWin = window.top || window.parent;
-                                const targetUrl = topWin.location.origin + topWin.location.pathname + queryString;
-                                const a = document.createElement('a');
-                                a.href = targetUrl;
-                                a.target = '_top';
-                                document.body.appendChild(a);
-                                a.click();
-                                a.remove();
+                                // Clean the base URL by stripping any existing query string or hash to prevent recursion loops
+                                let baseHref = topWin.location.href.split('?')[0].split('#')[0];
+                                topWin.location.href = baseHref + queryString;
                             }} catch(err) {{
-                                window.location.href = queryString;
+                                let baseHref = window.location.href.split('?')[0].split('#')[0];
+                                window.location.href = baseHref + queryString;
                             }}
                         }}
 

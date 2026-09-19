@@ -62,7 +62,6 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
     creds = get_credentials()
     headers = {"Authorization": f"Bearer {creds.token}"}
     
-    # Step 1: Initiate resumable upload session
     init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
     init_headers = {
         **headers,
@@ -84,7 +83,6 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
     if not upload_url:
         raise Exception("Upload session missing Location header from Google Drive.")
         
-    # Step 2: Upload file bytes to session URL
     put_headers = {
         "Content-Type": mime_type,
         "Content-Length": str(len(file_bytes))
@@ -299,11 +297,9 @@ with tab2:
                     is_mine = fid in st.session_state.my_uploads
                     is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
                     
-                    # Read properties for likes count
                     props = file.get('properties') or {}
                     likes_count = int(props.get('likes', '0'))
                     
-                    # Extract uploader name from file title prefix
                     if '_' in raw_title:
                         uploader_name = raw_title.split('_', 1)[0].strip()
                     else:
@@ -319,13 +315,13 @@ with tab2:
                     delete_html = f'<button class="delete-btn" title="Delete Photo" onclick="deleteItem(event, \'{fid}\')">✕</button>' if is_mine else ''
                         
                     html_items.append(f'''
-                    <div class="grid-card">
+                    <div class="grid-card" id="card-{fid}">
                         <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount(event)" />
-                        <button class="like-btn" title="Like memory" onclick="likeItem(event, \'{fid}\')">
-                            ❤️ <span>{likes_count}</span>
+                        <button class="like-btn" id="like-btn-{fid}" title="Like memory" onclick="likeItem(event, \'{fid}\')">
+                            ❤️ <span id="like-count-{fid}">{likes_count}</span>
                         </button>
                         {delete_html}
-                        <div class="card-link" onclick="openModal('{full_image}', '{preview_url}', {'true' if is_video else 'false'})">
+                        <div class="card-link" onclick="handleCardClick(event, \'{fid}\', \'{full_image}\', \'{preview_url}\', {'true' if is_video else 'false'})">
                             {media_content}
                         </div>
                         <div class="uploader-tag">Added by {uploader_name}</div>
@@ -340,7 +336,6 @@ with tab2:
                     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
                     body {{ background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
                     
-                    /* FIXED 3-COLUMN MOBILE GRID */
                     .gallery-grid {{
                         display: grid !important;
                         grid-template-columns: repeat(3, 1fr) !important;
@@ -356,6 +351,7 @@ with tab2:
                         border-radius: 4px;
                         overflow: hidden;
                         cursor: pointer;
+                        user-select: none;
                     }}
                     
                     .card-link {{
@@ -381,7 +377,6 @@ with tab2:
                         background: #222;
                     }}
                     
-                    /* UPLOADER NAME BADGE */
                     .uploader-tag {{
                         position: absolute;
                         bottom: 0;
@@ -399,7 +394,6 @@ with tab2:
                         z-index: 5;
                     }}
                     
-                    /* TOP-LEFT OVERLAY: CHECKBOX */
                     .select-check {{
                         position: absolute;
                         top: 6px;
@@ -411,7 +405,6 @@ with tab2:
                         cursor: pointer;
                     }}
 
-                    /* TOP-CENTER OVERLAY: LIKE BUTTON & COUNT */
                     .like-btn {{
                         position: absolute;
                         top: 6px;
@@ -430,14 +423,32 @@ with tab2:
                         gap: 3px;
                         line-height: 1;
                         font-family: inherit;
+                        transition: transform 0.15s ease, background 0.15s ease;
                     }}
                     
-                    .like-btn:hover {{
-                        background: rgba(0, 0, 0, 0.88);
-                        transform: translateX(-50%) scale(1.05);
+                    .like-btn.liked {{
+                        background: rgba(225, 29, 72, 0.9);
+                        border-color: #ff4d6d;
+                        transform: translateX(-50%) scale(1.15);
                     }}
 
-                    /* TOP-RIGHT OVERLAY: DELETE BUTTON */
+                    /* HEART POP ANIMATION ON TAP/CLICK */
+                    @keyframes heartBurst {{
+                        0% {{ opacity: 1; transform: translate(-50%, -50%) scale(0.3); }}
+                        50% {{ opacity: 1; transform: translate(-50%, -80%) scale(1.5); }}
+                        100% {{ opacity: 0; transform: translate(-50%, -120%) scale(2.0); }}
+                    }}
+
+                    .pop-heart {{
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        font-size: 42px;
+                        pointer-events: none;
+                        z-index: 25;
+                        animation: heartBurst 0.65s cubic-bezier(0.17, 0.89, 0.32, 1.28) forwards;
+                    }}
+
                     .delete-btn {{
                         position: absolute;
                         top: 6px;
@@ -456,7 +467,6 @@ with tab2:
                         justify-content: center;
                     }}
                     
-                    /* ACTION BAR */
                     .action-bar {{
                         margin-top: 12px;
                         padding: 10px 14px;
@@ -495,6 +505,58 @@ with tab2:
                     </div>
 
                     <script>
+                        let clickTimers = {{}};
+                        let tapCounts = {{}};
+
+                        function triggerHeartAnimation(fid) {{
+                            const card = document.getElementById('card-' + fid);
+                            const countSpan = document.getElementById('like-count-' + fid);
+                            const likeBtn = document.getElementById('like-btn-' + fid);
+
+                            if (card) {{
+                                const burst = document.createElement('div');
+                                burst.className = 'pop-heart';
+                                burst.innerText = '❤️';
+                                card.appendChild(burst);
+                                setTimeout(() => burst.remove(), 650);
+                            }}
+
+                            if (likeBtn) {{
+                                likeBtn.classList.add('liked');
+                            }}
+
+                            if (countSpan) {{
+                                const cur = parseInt(countSpan.innerText || '0');
+                                countSpan.innerText = cur + 1;
+                            }}
+
+                            setTimeout(() => {{
+                                window.parent.location.search = '?like_id=' + fid;
+                            }}, 300);
+                        }}
+
+                        function likeItem(e, fid) {{
+                            if (e) e.stopPropagation();
+                            triggerHeartAnimation(fid);
+                        }}
+
+                        function handleCardClick(e, fid, fullImg, previewUrl, isVideo) {{
+                            if (e) e.stopPropagation();
+                            
+                            tapCounts[fid] = (tapCounts[fid] || 0) + 1;
+
+                            if (tapCounts[fid] === 1) {{
+                                clickTimers[fid] = setTimeout(() => {{
+                                    tapCounts[fid] = 0;
+                                    openModal(fullImg, previewUrl, isVideo);
+                                }}, 260);
+                            }} else if (tapCounts[fid] === 2) {{
+                                clearTimeout(clickTimers[fid]);
+                                tapCounts[fid] = 0;
+                                triggerHeartAnimation(fid);
+                            }}
+                        }}
+
                         function openModal(fullImg, previewUrl, isVideo) {{
                             const parentWin = window.parent;
                             const parentDoc = parentWin.document;
@@ -516,7 +578,6 @@ with tab2:
                                 parentDoc.body.appendChild(overlay);
                             }}
 
-                            // Close on backdrop click
                             overlay.onclick = function(e) {{
                                 if (e.target === overlay) {{
                                     parentWin.closeWeddingModal();
@@ -569,11 +630,6 @@ with tab2:
                             const btn = document.getElementById('dl-btn');
                             countText.innerText = checked.length + " item(s) selected";
                             btn.disabled = checked.length === 0;
-                        }}
-
-                        function likeItem(e, fid) {{
-                            if (e) e.stopPropagation();
-                            window.parent.location.search = '?like_id=' + fid;
                         }}
 
                         function prepareZipDownload() {{

@@ -81,7 +81,7 @@ with tab1:
                 failed_files = []
                 
                 for index, uploaded_file in enumerate(uploaded_files):
-                    status_text.text(f"Uploading {index + 1} of {total_files}: {uploaded_file.name}...")
+                    status_text.text(f"Uploading {index + 1} of {total_files}: {uploaded_file.name} (0%)...")
                     uploaded_successfully = False
                     last_err = None
                     
@@ -91,17 +91,29 @@ with tab1:
                                 'name': f"{guest_name or 'Guest'}_{uploaded_file.name}",
                                 'parents': [TARGET_FOLDER_ID]
                             }
+                            
+                            # Stream in 5MB chunks to handle large video files reliably
                             media = MediaIoBaseUpload(
                                 io.BytesIO(uploaded_file.getvalue()),
                                 mimetype=uploaded_file.type or 'application/octet-stream',
+                                chunksize=5 * 1024 * 1024,
                                 resumable=True
                             )
-                            file = drive_service.files().create(
+                            
+                            request = drive_service.files().create(
                                 body=file_metadata,
                                 media_body=media,
                                 fields='id'
-                            ).execute()
-                            file_id = file.get('id')
+                            )
+                            
+                            response = None
+                            while response is None:
+                                status, response = request.next_chunk()
+                                if status:
+                                    pct = int(status.progress() * 100)
+                                    status_text.text(f"Uploading {index + 1}/{total_files}: {uploaded_file.name} ({pct}%)...")
+
+                            file_id = response.get('id')
                             if file_id and file_id not in st.session_state.my_uploads:
                                 st.session_state.my_uploads.append(file_id)
                             uploaded_successfully = True

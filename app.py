@@ -145,6 +145,8 @@ with tab1:
                 success_count = 0
                 failed_files = []
                 
+                clean_guest_name = guest_name.strip() if guest_name and guest_name.strip() else "Guest"
+                
                 for index, uploaded_file in enumerate(uploaded_files):
                     file_raw = uploaded_file.getvalue()
                     file_size_mb = len(file_raw) / (1024 * 1024)
@@ -153,7 +155,7 @@ with tab1:
                     uploaded_successfully = False
                     last_err = None
                     
-                    file_title = f"{guest_name or 'Guest'}_{uploaded_file.name}"
+                    file_title = f"{clean_guest_name}_{uploaded_file.name}"
                     mime_type = uploaded_file.type or 'application/octet-stream'
 
                     for attempt in range(3):
@@ -271,12 +273,21 @@ with tab2:
                 html_items = []
                 for file in files:
                     fid = file.get('id')
+                    raw_title = file.get('name', '')
                     mime = file.get('mimeType', '')
                     thumb_small = file.get('thumbnailLink', '').replace('=s220', '=s400')
                     full_image = file.get('thumbnailLink', '').replace('=s220', '=s1600')
                     preview_url = f"https://drive.google.com/file/d/{fid}/preview"
                     is_mine = fid in st.session_state.my_uploads
                     is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
+                    
+                    # Extract uploader name from file title prefix
+                    if '_' in raw_title:
+                        uploader_name = raw_title.split('_', 1)[0].strip()
+                    else:
+                        uploader_name = 'Guest'
+                    if not uploader_name:
+                        uploader_name = 'Guest'
                     
                     if not is_video and thumb_small:
                         media_content = f'<img src="{thumb_small}" alt="Photo" />'
@@ -292,6 +303,7 @@ with tab2:
                         <div class="card-link" onclick="openModal('{full_image}', '{preview_url}', {'true' if is_video else 'false'})">
                             {media_content}
                         </div>
+                        <div class="uploader-tag">Added by {uploader_name}</div>
                     </div>
                     ''')
 
@@ -342,6 +354,24 @@ with tab2:
                         color: #fff;
                         font-size: 11px;
                         background: #222;
+                    }}
+                    
+                    /* UPLOADER NAME BADGE */
+                    .uploader-tag {{
+                        position: absolute;
+                        bottom: 0;
+                        left: 0;
+                        right: 0;
+                        background: rgba(0, 0, 0, 0.72);
+                        color: #ffffff;
+                        font-size: 10px;
+                        padding: 3px 4px;
+                        text-align: center;
+                        white-space: nowrap;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        pointer-events: none;
+                        z-index: 5;
                     }}
                     
                     /* TOP-LEFT OVERLAY: CHECKBOX */

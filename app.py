@@ -1,14 +1,17 @@
-import streamlit as st
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
-import google_auth_httplib2
-import httplib2
 import io
 import socket
 import ssl
 import time
 import zipfile
+import requests
+
+import google_auth_httplib2
+import google.auth.transport.requests
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+import httplib2
+import streamlit as st
 
 # Global socket timeout
 socket.setdefaulttimeout(120)
@@ -27,8 +30,8 @@ if 'my_uploads' not in st.session_state:
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 
-def create_drive_service():
-    """Create a fresh Google Drive service with clean SSL socket settings."""
+def get_credentials():
+    """Retrieve and refresh Google OAuth credentials."""
     creds = Credentials(
         token=None,
         refresh_token=st.secrets["refresh_token"],
@@ -36,6 +39,13 @@ def create_drive_service():
         client_secret=st.secrets["client_secret"],
         token_uri="https://oauth2.googleapis.com/token",
     )
+    if not creds.valid:
+        creds.refresh(google.auth.transport.requests.Request())
+    return creds
+
+def create_drive_service():
+    """Create a fresh Google Drive service with clean SSL socket settings."""
+    creds = get_credentials()
     http = httplib2.Http(timeout=120)
     authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
     return build('drive', 'v3', http=authorized_http)
@@ -171,24 +181,30 @@ with tab2:
         with st.spinner(f"Packaging {len(zip_ids)} memories into a ZIP folder..."):
             try:
                 zip_buffer = io.BytesIO()
+                creds = get_credentials()
+                headers = {"Authorization": f"Bearer {creds.token}"}
+
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                     for fid in zip_ids:
                         for attempt in range(3):
                             try:
+                                # Get metadata for filename
                                 active_service = drive_service if attempt == 0 else create_drive_service()
                                 f_meta = active_service.files().get(fileId=fid, fields="name").execute()
-                                req = active_service.files().get_media(fileId=fid)
-                                file_bytes = io.BytesIO()
-                                downloader = MediaIoBaseDownload(file_bytes, req)
-                                done = False
-                                while not done:
-                                    _, done = downloader.next_chunk()
-                                file_name = f_meta.get("name", f"wedding_photo_{fid}.jpg")
-                                zf.writestr(file_name, file_bytes.getvalue())
-                                break
+                                file_name = f_meta.get("name", f"wedding_memory_{fid}.jpg")
+
+                                # Use requests directly to avoid httplib2 redirect errors on video/large files
+                                download_url = f"https://www.googleapis.com/drive/v3/files/{fid}?alt=media"
+                                res = requests.get(download_url, headers=headers, timeout=120)
+                                
+                                if res.status_code == 200:
+                                    zf.writestr(file_name, res.content)
+                                    break
+                                else:
+                                    raise Exception(f"HTTP {res.status_code}: {res.text[:100]}")
                             except Exception as dl_err:
                                 if attempt == 2:
-                                    raise dl_err
+                                    st.warning(f"Could not include file {fid} in ZIP: {dl_err}")
                                 time.sleep(1)
                 
                 zip_buffer.seek(0)

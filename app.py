@@ -5,6 +5,7 @@ from googleapiclient.http import MediaIoBaseUpload
 import io
 import socket
 import ssl
+import time
 
 # Page configuration
 st.set_page_config(
@@ -23,7 +24,6 @@ if 'my_uploads' not in st.session_state:
 # --- CUSTOM CSS: FORCE STRICTLY 3 COLUMNS ACROSS ALL MOBILE SCREENS ---
 st.markdown("""
 <style>
-    /* Force Streamlit horizontal blocks and columns to stay side-by-side on mobile */
     [data-testid="stHorizontalBlock"] {
         flex-wrap: nowrap !important;
     }
@@ -115,31 +115,43 @@ with tab1:
                 
                 for index, uploaded_file in enumerate(uploaded_files):
                     status_text.text(f"Uploading {index + 1} of {total_files}: {uploaded_file.name}...")
-                    try:
-                        file_metadata = {
-                            'name': f"{guest_name or 'Guest'}_{uploaded_file.name}",
-                            'parents': [TARGET_FOLDER_ID]
-                        }
-                        
-                        media = MediaIoBaseUpload(
-                            io.BytesIO(uploaded_file.getvalue()),
-                            mimetype=uploaded_file.type or 'application/octet-stream',
-                            resumable=True
-                        )
-                        
-                        file = drive_service.files().create(
-                            body=file_metadata,
-                            media_body=media,
-                            fields='id'
-                        ).execute()
-                        
-                        file_id = file.get('id')
-                        if file_id and file_id not in st.session_state.my_uploads:
-                            st.session_state.my_uploads.append(file_id)
+                    
+                    # Retry loop for uploads
+                    uploaded_successfully = False
+                    last_err = None
+                    
+                    for attempt in range(3):
+                        try:
+                            file_metadata = {
+                                'name': f"{guest_name or 'Guest'}_{uploaded_file.name}",
+                                'parents': [TARGET_FOLDER_ID]
+                            }
                             
-                        success_count += 1
-                    except Exception as e:
-                        failed_files.append((uploaded_file.name, str(e)))
+                            media = MediaIoBaseUpload(
+                                io.BytesIO(uploaded_file.getvalue()),
+                                mimetype=uploaded_file.type or 'application/octet-stream',
+                                resumable=True
+                            )
+                            
+                            file = drive_service.files().create(
+                                body=file_metadata,
+                                media_body=media,
+                                fields='id'
+                            ).execute()
+                            
+                            file_id = file.get('id')
+                            if file_id and file_id not in st.session_state.my_uploads:
+                                st.session_state.my_uploads.append(file_id)
+                                
+                            uploaded_successfully = True
+                            success_count += 1
+                            break
+                        except (ssl.SSLError, socket.timeout, Exception) as e:
+                            last_err = e
+                            time.sleep(1) # Wait a second before retrying
+                    
+                    if not uploaded_successfully:
+                        failed_files.append((uploaded_file.name, str(last_err)))
                     
                     progress_bar.progress((index + 1) / total_files)
                 
@@ -160,6 +172,7 @@ with tab2:
         try:
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
             
+            # Robust retry wrapper for listing files
             results = None
             for attempt in range(3):
                 try:
@@ -173,8 +186,9 @@ with tab2:
                 except (ssl.SSLError, socket.timeout, Exception) as net_err:
                     if attempt == 2:
                         raise net_err
+                    time.sleep(1)
             
-            files = results.get('files', []) if files else []
+            files = results.get('files', []) if results else []
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")

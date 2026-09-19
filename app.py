@@ -17,21 +17,9 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
-if 'selected_files' not in st.session_state:
-    st.session_state.selected_files = set()
 
-# Handle query parameters for actions (selection toggle & deletion)
+# Handle deletion via query params safely
 params = st.query_params
-
-if "toggle_id" in params:
-    fid = params["toggle_id"]
-    if fid in st.session_state.selected_files:
-        st.session_state.selected_files.remove(fid)
-    else:
-        st.session_state.selected_files.add(fid)
-    del st.query_params["toggle_id"]
-    st.rerun()
-
 if "delete_id" in params:
     del_id = params["delete_id"]
     try:
@@ -46,14 +34,12 @@ if "delete_id" in params:
         ds.files().delete(fileId=del_id).execute()
         if del_id in st.session_state.my_uploads:
             st.session_state.my_uploads.remove(del_id)
-        if del_id in st.session_state.selected_files:
-            st.session_state.selected_files.remove(del_id)
     except Exception as e:
         st.error(f"Delete failed: {e}")
     del st.query_params["delete_id"]
     st.rerun()
 
-# CSS for true 3-column mobile grid with zero horizontal scroll and absolute thumbnail overlays
+# CSS for true 3-column mobile grid with zero horizontal scroll
 st.markdown("""
 <style>
     .main .block-container {
@@ -68,11 +54,15 @@ st.markdown("""
         width: 100%;
         margin-bottom: 20px;
     }
+    .photo-card-wrapper {
+        background: #111;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-bottom: 8px;
+    }
     .photo-card {
         position: relative;
         background-color: #111;
-        border-radius: 4px;
-        overflow: hidden;
         aspect-ratio: 1 / 1;
         width: 100%;
     }
@@ -91,27 +81,6 @@ st.markdown("""
         background: #222;
         color: white;
         font-size: 12px;
-    }
-    .select-overlay {
-        position: absolute;
-        top: 4px;
-        left: 4px;
-        width: 24px;
-        height: 24px;
-        border-radius: 50%;
-        background: rgba(0, 0, 0, 0.5);
-        border: 2px solid white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-size: 12px;
-        text-decoration: none;
-        z-index: 10;
-    }
-    .select-overlay.selected {
-        background: #1a73e8;
-        border-color: #1a73e8;
     }
     .delete-overlay {
         position: absolute;
@@ -137,6 +106,13 @@ st.markdown("""
         width: 100%;
         height: 100%;
         z-index: 5;
+    }
+    .card-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 4px 6px;
+        background: #1a1a1a;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -252,32 +228,15 @@ with tab2:
                         raise net_err
                     time.sleep(1)
             
-            files = results.get('files', []) if results else []
+            files = results.get('files', []) if files else []
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                # --- TOP BATCH DOWNLOAD ACTION BAR ---
-                active_selected = list(st.session_state.selected_files)
-                if active_selected:
-                    st.markdown("---")
-                    col_b1, col_b2 = st.columns([0.5, 0.5])
-                    with col_b1:
-                        st.write(f"**{len(active_selected)} items selected**")
-                    with col_b2:
-                        if st.button("📥 Download Selected"):
-                            js_code = ""
-                            for i, fid in enumerate(active_selected):
-                                matched = next((f for f in files if f['id'] == fid), None)
-                                if matched and matched.get('webContentLink'):
-                                    link = matched['webContentLink']
-                                    js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
-                            if js_code:
-                                st.components.v1.html(f"<script>{js_code}</script>", height=0)
-                                st.success("Downloading straight to your device folder...")
-                    st.markdown("---")
-
-                # --- RENDER PURE CSS 3-COLUMN GRID WITH TOP-CORNER OVERLAYS ---
+                # Track active selections for batch download
+                active_selected_links = []
+                
+                # Render grid
                 grid_html = '<div class="google-photos-grid">'
                 for file in files:
                     file_id = file.get('id')
@@ -285,7 +244,6 @@ with tab2:
                     thumb_link = file.get('thumbnailLink')
                     web_link = file.get('webViewLink', '#')
                     is_mine = file_id in st.session_state.my_uploads
-                    is_selected = file_id in st.session_state.selected_files
                     
                     if 'image' in mime_type and thumb_link:
                         img_src = thumb_link.replace('=s220', '=s400')
@@ -293,22 +251,43 @@ with tab2:
                     else:
                         media_content = '<div class="video-badge">▶ Video</div>'
                     
-                    sel_class = "select-overlay selected" if is_selected else "select-overlay"
-                    sel_symbol = "✓" if is_selected else ""
-                    
                     delete_btn_html = f'<a href="?delete_id={file_id}" class="delete-overlay" title="Delete">✕</a>' if is_mine else ''
                     
                     grid_html += f'''
                     <div class="photo-card">
                         <a href="{web_link}" target="_blank" class="view-link"></a>
                         {media_content}
-                        <a href="?toggle_id={file_id}" class="{sel_class}">{sel_symbol}</a>
                         {delete_btn_html}
                     </div>
                     '''
                 grid_html += '</div>'
                 
                 st.markdown(grid_html, unsafe_allow_html=True)
+
+                # Native checkboxes underneath each thumbnail for clean multi-select batch downloading
+                st.write("### Select items to download:")
+                cols = st.columns(3)
+                for idx, file in enumerate(files):
+                    file_id = file.get('id')
+                    with cols[idx % 3]:
+                        is_sel = st.checkbox(f"Select #{idx+1}", key=f"sel_{file_id}")
+                        if is_sel and file.get('webContentLink'):
+                            active_selected_links.append(file['webContentLink'])
+
+                if active_selected_links:
+                    st.markdown("---")
+                    col_b1, col_b2 = st.columns([0.5, 0.5])
+                    with col_b1:
+                        st.write(f"**{len(active_selected_links)} items selected**")
+                    with col_b2:
+                        if st.button("📥 Download Selected"):
+                            js_code = ""
+                            for i, link in enumerate(active_selected_links):
+                                js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
+                            if js_code:
+                                st.components.v1.html(f"<script>{js_code}</script>", height=0)
+                                st.success("Downloading straight to your device folder...")
+                    st.markdown("---")
 
         except Exception as e:
             st.error(f"Google Drive Error: {e}")

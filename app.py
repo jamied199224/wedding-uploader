@@ -59,9 +59,9 @@ def get_google_services():
         return None
 
 def get_or_create_likes_file_id(folder_id):
-    """Retrieve or create likes.json using direct requests for absolute reliability."""
+    """Retrieve or create likes.json using direct requests with cache busting."""
     creds = get_credentials()
-    headers = {"Authorization": f"Bearer {creds.token}"}
+    headers = {"Authorization": f"Bearer {creds.token}", "Cache-Control": "no-cache"}
     
     query = f"'{folder_id}' in parents and name='likes.json' and trashed=false"
     res = requests.get(f"https://www.googleapis.com/drive/v3/files?q={requests.utils.quote(query)}", headers=headers, timeout=30)
@@ -91,41 +91,48 @@ def get_or_create_likes_file_id(folder_id):
     return None
 
 def load_likes_data():
-    """Load the likes dictionary from likes.json via requests."""
+    """Load the likes dictionary from likes.json with strict no-cache headers."""
     try:
         creds = get_credentials()
         file_id = get_or_create_likes_file_id(TARGET_FOLDER_ID)
         if not file_id:
             return {}
-        headers = {"Authorization": f"Bearer {creds.token}"}
-        res = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media", headers=headers, timeout=30)
+        
+        # Append timestamp to bypass any intermediate caching
+        headers = {"Authorization": f"Bearer {creds.token}", "Cache-Control": "no-cache"}
+        url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&_t={time.time()}"
+        res = requests.get(url, headers=headers, timeout=30)
+        
         if res.status_code == 200 and res.text.strip():
-            return json.loads(res.text)
+            data = json.loads(res.text)
+            if isinstance(data, dict):
+                return data
     except Exception as e:
         print(f"Error loading likes: {e}")
     return {}
 
 def save_likes_data(likes_dict):
-    """Save the updated likes dictionary back to likes.json via requests."""
+    """Save the updated likes dictionary back to likes.json and verify."""
     try:
         creds = get_credentials()
         file_id = get_or_create_likes_file_id(TARGET_FOLDER_ID)
         if not file_id:
             return False
-        headers = {"Authorization": f"Bearer {creds.token}"}
+        headers = {"Authorization": f"Bearer {creds.token}", "Cache-Control": "no-cache"}
         res = requests.put(
             f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
             headers={**headers, "Content-Type": "application/json"},
             data=json.dumps(likes_dict),
             timeout=30
         )
+        time.sleep(0.4)  # Ensure Google Drive commit completes before returning
         return res.status_code in [200, 201]
     except Exception as e:
         print(f"Error saving likes: {e}")
         return False
 
 def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
-    """Upload large files reliably using requests."""
+    """Upload files reliably using resumable requests."""
     creds = get_credentials()
     headers = {"Authorization": f"Bearer {creds.token}"}
     
@@ -178,14 +185,15 @@ if "delete_id" in params and drive_service:
         st.success("Memory deleted!")
     except Exception as e:
         st.error(f"Delete failed: {e}")
-    del st.query_params["delete_id"]
+    for key in ["delete_id", "_t"]:
+        if key in st.query_params:
+            del st.query_params[key]
     st.rerun()
 
 if "like_id" in params:
     like_id = params["like_id"]
     action = params.get("action", "like")
     try:
-        # Load fresh likes data, combine/update count, and save back immediately
         likes_dict = load_likes_data()
         current_likes = int(likes_dict.get(like_id, 0))
         
@@ -198,10 +206,9 @@ if "like_id" in params:
     except Exception as e:
         st.error(f"Like update failed: {e}")
     
-    if "like_id" in st.query_params:
-        del st.query_params["like_id"]
-    if "action" in st.query_params:
-        del st.query_params["action"]
+    for key in ["like_id", "action", "_t"]:
+        if key in st.query_params:
+            del st.query_params[key]
     st.rerun()
 
 st.title("💍 Jamie & Millie's Wedding Album")
@@ -332,7 +339,9 @@ with tab2:
                     )
                 with col_z2:
                     if st.button("Close / Done"):
-                        del st.query_params["zip_ids"]
+                        for key in ["zip_ids", "_t"]:
+                            if key in st.query_params:
+                                del st.query_params[key]
                         st.rerun()
                 st.markdown("---")
             except Exception as e:
@@ -656,8 +665,8 @@ with tab2:
                             }}
 
                             setTimeout(() => {{
-                                window.parent.location.search = '?like_id=' + fid + '&action=' + action;
-                            }}, 300);
+                                window.parent.location.search = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
+                            }}, 350);
                         }}
 
                         function handleCardClick(e, fid, fullImg, previewUrl, isVideo) {{
@@ -759,14 +768,14 @@ with tab2:
                                 ids.push(cb.getAttribute('data-id'));
                             }});
                             if (ids.length > 0) {{
-                                window.parent.location.search = '?zip_ids=' + ids.join(',');
+                                window.parent.location.search = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
                             }}
                         }}
 
                         function deleteItem(e, fid) {{
                             if (e) e.stopPropagation();
                             if (confirm("Delete this photo from the album?")) {{
-                                window.parent.location.search = '?delete_id=' + fid;
+                                window.parent.location.search = '?delete_id=' + fid + '&_t=' + Date.now();
                             }}
                         }}
                     </script>

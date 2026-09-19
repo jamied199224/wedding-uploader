@@ -7,126 +7,16 @@ import socket
 import ssl
 import time
 
-# Page configuration
 st.set_page_config(
     page_title="Jamie & Millie's Wedding Album",
     page_icon="💍",
     layout="wide"
 )
 
-# Target Google Drive Folder
 TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
-# Session state initialization
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
-
-# --- CUSTOM CSS: NATIVE OVERLAY CONTROLS + ZERO-SCROLL MOBILE 3-COLUMN GRID ---
-st.markdown("""
-<style>
-    /* Prevent horizontal page scrolling on mobile viewports */
-    html, body, .stApp, .main, .block-container {
-        overflow-x: hidden !important;
-        max-width: 100vw !important;
-    }
-    .main .block-container {
-        padding-left: 0.25rem !important;
-        padding-right: 0.25rem !important;
-        padding-top: 1rem !important;
-    }
-
-    /* Force Streamlit 3-column rows to fit strictly within 100% width */
-    [data-testid="stHorizontalBlock"] {
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
-        gap: 3px !important;
-        width: 100% !important;
-        margin-bottom: 3px !important;
-    }
-    
-    [data-testid="column"] {
-        position: relative !important;
-        flex: 1 1 0% !important;
-        min-width: 0 !important;
-        padding: 0 !important;
-    }
-
-    /* Square photo card container */
-    .photo-card {
-        position: relative;
-        width: 100%;
-        aspect-ratio: 1 / 1;
-        border-radius: 4px;
-        overflow: hidden;
-        background: #111;
-    }
-    .photo-card img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
-    }
-    .video-badge {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 100%;
-        height: 100%;
-        background: #222;
-        color: white;
-        font-size: 11px;
-    }
-    .view-link {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        z-index: 1;
-    }
-
-    /* OVERLAY 1: Top-Left Checkbox */
-    [data-testid="column"] [data-testid="stCheckbox"] {
-        position: absolute !important;
-        top: 4px !important;
-        left: 4px !important;
-        z-index: 10 !important;
-        background: rgba(0, 0, 0, 0.4);
-        border-radius: 50%;
-        padding: 2px !important;
-        margin: 0 !important;
-    }
-    [data-testid="column"] [data-testid="stCheckbox"] label p {
-        display: none !important; /* Hide text label */
-    }
-
-    /* OVERLAY 2: Top-Right Delete Button */
-    [data-testid="column"] [data-testid="stElementContainer"]:has([data-testid="stButton"]) {
-        position: absolute !important;
-        top: 4px !important;
-        right: 4px !important;
-        z-index: 10 !important;
-        width: auto !important;
-    }
-    [data-testid="column"] button {
-        background: rgba(0, 0, 0, 0.6) !important;
-        color: white !important;
-        border: 1px solid rgba(255, 255, 255, 0.8) !important;
-        border-radius: 50% !important;
-        width: 24px !important;
-        height: 24px !important;
-        min-width: 24px !important;
-        min-height: 24px !important;
-        padding: 0 !important;
-        font-size: 11px !important;
-        line-height: 1 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 st.title("💍 Jamie & Millie's Wedding Album")
 st.write("Welcome! Share your favorite moments and browse live memories below.")
@@ -244,66 +134,154 @@ with tab2:
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                active_selected_links = []
-                
-                # Render photos in rows of 3 columns
-                for i in range(0, len(files), 3):
-                    row_files = files[i:i+3]
-                    cols = st.columns(3)
+                # Custom HTML component rendering a rigid CSS 3-column grid with native overlays
+                html_items = []
+                for file in files:
+                    fid = file.get('id')
+                    mime = file.get('mimeType', '')
+                    thumb = file.get('thumbnailLink', '').replace('=s220', '=s400')
+                    view_url = file.get('webViewLink', '#')
+                    dl_url = file.get('webContentLink', '#')
                     
-                    for idx, file in enumerate(row_files):
-                        with cols[idx]:
-                            file_id = file.get('id')
-                            mime_type = file.get('mimeType', '')
-                            thumb_link = file.get('thumbnailLink')
-                            web_link = file.get('webViewLink', '#')
-                            is_mine = file_id in st.session_state.my_uploads
-                            
-                            # 1. Base Thumbnail
-                            if 'image' in mime_type and thumb_link:
-                                img_src = thumb_link.replace('=s220', '=s400')
-                                card_html = f'''
-                                <div class="photo-card">
-                                    <a href="{web_link}" target="_blank" class="view-link"></a>
-                                    <img src="{img_src}" alt="Memory">
-                                </div>
-                                '''
-                            else:
-                                card_html = f'''
-                                <div class="photo-card">
-                                    <a href="{web_link}" target="_blank" class="view-link"></a>
-                                    <div class="video-badge">▶ Video</div>
-                                </div>
-                                '''
-                            st.markdown(card_html, unsafe_allow_html=True)
-                            
-                            # 2. Overlay Top-Left Checkbox
-                            is_checked = st.checkbox("", key=f"sel_{file_id}", label_visibility="collapsed")
-                            if is_checked and file.get('webContentLink'):
-                                active_selected_links.append(file['webContentLink'])
-                            
-                            # 3. Overlay Top-Right Delete Button (for user's own uploads)
-                            if is_mine:
-                                if st.button("✕", key=f"del_{file_id}", help="Delete photo"):
-                                    drive_service.files().delete(fileId=file_id).execute()
-                                    if file_id in st.session_state.my_uploads:
-                                        st.session_state.my_uploads.remove(file_id)
-                                    st.rerun()
+                    if 'image' in mime and thumb:
+                        media_content = f'<img src="{thumb}" alt="Photo" />'
+                    else:
+                        media_content = '<div class="video-label">▶ Video</div>'
+                        
+                    html_items.append(f'''
+                    <div class="grid-card">
+                        <input type="checkbox" class="select-check" data-dl="{dl_url}" onclick="updateCount()" />
+                        <a href="{view_url}" target="_blank" class="card-link">{media_content}</a>
+                    </div>
+                    ''')
 
-                # Action Bar for Download
-                if active_selected_links:
-                    st.markdown("---")
-                    col_b1, col_b2 = st.columns([0.5, 0.5])
-                    with col_b1:
-                        st.write(f"**{len(active_selected_links)} selected**")
-                    with col_b2:
-                        if st.button("📥 Download Selected"):
-                            js_code = ""
-                            for i, link in enumerate(active_selected_links):
-                                js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
-                            if js_code:
-                                st.components.v1.html(f"<script>{js_code}</script>", height=0)
-                                st.success("Downloading straight to your device folder...")
+                gallery_html = f'''
+                <!DOCTYPE html>
+                <html>
+                <head>
+                <style>
+                    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+                    body {{ background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+                    
+                    /* STRICT 3-COLUMN GRID locked across all mobile viewports */
+                    .gallery-grid {{
+                        display: grid !important;
+                        grid-template-columns: repeat(3, 1fr) !important;
+                        gap: 4px !important;
+                        width: 100% !important;
+                    }}
+                    
+                    .grid-card {{
+                        position: relative;
+                        width: 100%;
+                        aspect-ratio: 1 / 1;
+                        background: #111;
+                        border-radius: 4px;
+                        overflow: hidden;
+                    }}
+                    
+                    .card-link {{
+                        display: block;
+                        width: 100%;
+                        height: 100%;
+                        text-decoration: none;
+                    }}
+                    
+                    .grid-card img {{
+                        width: 100%;
+                        height: 100%;
+                        object-fit: cover;
+                        display: block;
+                    }}
+                    
+                    .video-label {{
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        height: 100%;
+                        color: #fff;
+                        font-size: 11px;
+                        background: #222;
+                    }}
+                    
+                    /* TOP-LEFT OVERLAY CHECKBOX */
+                    .select-check {{
+                        position: absolute;
+                        top: 6px;
+                        left: 6px;
+                        z-index: 10;
+                        width: 20px;
+                        height: 20px;
+                        accent-color: #ff4b4b;
+                        cursor: pointer;
+                    }}
+                    
+                    /* ACTION BAR */
+                    .action-bar {{
+                        margin-top: 12px;
+                        padding: 10px;
+                        background: #1e1e1e;
+                        border-radius: 8px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        color: #fff;
+                    }}
+                    
+                    .dl-btn {{
+                        background: #ff4b4b;
+                        color: #fff;
+                        border: none;
+                        padding: 8px 16px;
+                        border-radius: 6px;
+                        font-weight: bold;
+                        cursor: pointer;
+                    }}
+                    .dl-btn:disabled {{
+                        background: #555;
+                        cursor: not-allowed;
+                    }}
+                </style>
+                </head>
+                <body>
+                    <div class="gallery-grid">
+                        {"".join(html_items)}
+                    </div>
+                    
+                    <div class="action-bar">
+                        <span id="count-text">0 items selected</span>
+                        <button id="dl-btn" class="dl-btn" onclick="downloadSelected()" disabled>📥 Download</button>
+                    </div>
+
+                    <script>
+                        function updateCount() {{
+                            const checked = document.querySelectorAll('.select-check:checked');
+                            const countText = document.getElementById('count-text');
+                            const btn = document.getElementById('dl-btn');
+                            countText.innerText = checked.length + " item(s) selected";
+                            btn.disabled = checked.length === 0;
+                        }}
+
+                        function downloadSelected() {{
+                            const checked = document.querySelectorAll('.select-check:checked');
+                            checked.forEach((cb, i) => {{
+                                const url = cb.getAttribute('data-dl');
+                                if (url && url !== '#') {{
+                                    setTimeout(() => {{
+                                        window.open(url, '_blank');
+                                    }}, i * 300);
+                                }}
+                            }});
+                        }}
+                    </script>
+                </body>
+                </html>
+                '''
+                
+                # Render gallery frame with calculated dynamic height
+                grid_rows = (len(files) + 2) // 3
+                calculated_height = (grid_rows * 130) + 80
+                st.components.v1.html(gallery_html, height=calculated_height, scrolling=False)
 
         except Exception as e:
             st.error(f"Google Drive Error: {e}")

@@ -58,8 +58,74 @@ def get_google_services():
         st.error(f"Failed to authenticate with Google: {e}")
         return None
 
+def get_or_create_likes_file_id(folder_id):
+    """Retrieve or create likes.json using direct requests for absolute reliability."""
+    creds = get_credentials()
+    headers = {"Authorization": f"Bearer {creds.token}"}
+    
+    query = f"'{folder_id}' in parents and name='likes.json' and trashed=false"
+    res = requests.get(f"https://www.googleapis.com/drive/v3/files?q={requests.utils.quote(query)}", headers=headers, timeout=30)
+    
+    if res.status_code == 200:
+        files = res.json().get('files', [])
+        if files:
+            return files[0]['id']
+            
+    # Create likes.json if it doesn't exist
+    metadata = {'name': 'likes.json', 'parents': [folder_id]}
+    create_res = requests.post(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={**headers, "Content-Type": "application/json"},
+        json=metadata,
+        timeout=30
+    )
+    if create_res.status_code in [200, 201]:
+        file_id = create_res.json().get('id')
+        requests.put(
+            f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
+            headers={**headers, "Content-Type": "application/json"},
+            data="{}",
+            timeout=30
+        )
+        return file_id
+    return None
+
+def load_likes_data():
+    """Load the likes dictionary from likes.json via requests."""
+    try:
+        creds = get_credentials()
+        file_id = get_or_create_likes_file_id(TARGET_FOLDER_ID)
+        if not file_id:
+            return {}
+        headers = {"Authorization": f"Bearer {creds.token}"}
+        res = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media", headers=headers, timeout=30)
+        if res.status_code == 200 and res.text.strip():
+            return json.loads(res.text)
+    except Exception as e:
+        print(f"Error loading likes: {e}")
+    return {}
+
+def save_likes_data(likes_dict):
+    """Save the updated likes dictionary back to likes.json via requests."""
+    try:
+        creds = get_credentials()
+        file_id = get_or_create_likes_file_id(TARGET_FOLDER_ID)
+        if not file_id:
+            return False
+        headers = {"Authorization": f"Bearer {creds.token}"}
+        res = requests.put(
+            f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
+            headers={**headers, "Content-Type": "application/json"},
+            data=json.dumps(likes_dict),
+            timeout=30
+        )
+        return res.status_code in [200, 201]
+    except Exception as e:
+        print(f"Error saving likes: {e}")
+        return False
+
 def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
-    """Upload large files reliably using requests and initialize with 0 likes."""
+    """Upload large files reliably using requests."""
     creds = get_credentials()
     headers = {"Authorization": f"Bearer {creds.token}"}
     
@@ -72,8 +138,7 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
     }
     metadata = {
         'name': file_name,
-        'parents': [folder_id],
-        'description': '0'  # Initialize like count to 0 in metadata
+        'parents': [folder_id]
     }
     
     init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=60)
@@ -106,31 +171,30 @@ if "delete_id" in params and drive_service:
         drive_service.files().delete(fileId=del_id).execute()
         if del_id in st.session_state.my_uploads:
             st.session_state.my_uploads.remove(del_id)
+        likes_dict = load_likes_data()
+        if del_id in likes_dict:
+            del likes_dict[del_id]
+            save_likes_data(likes_dict)
         st.success("Memory deleted!")
     except Exception as e:
         st.error(f"Delete failed: {e}")
     del st.query_params["delete_id"]
     st.rerun()
 
-if "like_id" in params and drive_service:
+if "like_id" in params:
     like_id = params["like_id"]
     action = params.get("action", "like")
     try:
-        # Fetch current description (like count) from the file's metadata
-        file_meta = drive_service.files().get(fileId=like_id, fields="description").execute()
-        curr_desc = file_meta.get("description", "")
-        current_likes = int(curr_desc) if curr_desc and curr_desc.isdigit() else 0
+        # Load fresh likes data, combine/update count, and save back immediately
+        likes_dict = load_likes_data()
+        current_likes = int(likes_dict.get(like_id, 0))
         
         if action == "like":
-            new_likes = current_likes + 1
+            likes_dict[like_id] = current_likes + 1
         else:
-            new_likes = max(0, current_likes - 1)
+            likes_dict[like_id] = max(0, current_likes - 1)
             
-        # Save updated count directly back to the file's metadata description
-        drive_service.files().update(
-            fileId=like_id,
-            body={"description": str(new_likes)}
-        ).execute()
+        save_likes_data(likes_dict)
     except Exception as e:
         st.error(f"Like update failed: {e}")
     
@@ -276,7 +340,7 @@ with tab2:
 
     if drive_service:
         try:
-            query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
+            query = f"'{TARGET_FOLDER_ID}' in parents and name != 'likes.json' and trashed=false"
             results = None
             
             for attempt in range(3):
@@ -285,7 +349,7 @@ with tab2:
                     results = active_service.files().list(
                         q=query,
                         pageSize=100,
-                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType, description)",
+                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
                         orderBy="createdTime desc"
                     ).execute()
                     break
@@ -295,6 +359,7 @@ with tab2:
                     time.sleep(1)
             
             files = results.get('files', []) if results else []
+            likes_dict = load_likes_data()
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
@@ -310,10 +375,8 @@ with tab2:
                     is_mine = fid in st.session_state.my_uploads
                     is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
                     
-                    # Read like count directly from file metadata description
-                    desc = file.get('description', '')
                     try:
-                        likes_count = int(desc) if desc and desc.isdigit() else 0
+                        likes_count = int(likes_dict.get(fid, 0))
                     except ValueError:
                         likes_count = 0
                     

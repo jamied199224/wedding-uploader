@@ -233,9 +233,6 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
 drive_service, sheets_service = get_google_services()
 spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, TARGET_FOLDER_ID) if (drive_service and sheets_service) else None
 
-if drive_service and sheets_service and not spreadsheet_id:
-    st.warning("⚠️ Warning: Could not locate or create 'wedding_likes_db' Google Sheet in the target folder. Likes may not persist.")
-
 # --- HANDLE QUERY PARAMS (Delete, Like, & ZIP actions) ---
 params = st.query_params
 del_id = params.get("delete_id")
@@ -665,7 +662,6 @@ with tab2:
                         }}
 
                         function initApp() {{
-                            // 1. Handle device-locked deletes (only show delete button if uploaded on this browser)
                             let mine = getMyUploads();
                             const newlyUploaded = {recent_uploads_json};
                             if (newlyUploaded && newlyUploaded.length > 0) {{
@@ -682,7 +678,6 @@ with tab2:
                                 if (delBtn) delBtn.style.display = 'flex';
                             }});
 
-                            // 2. Sync one-like-per-browser state
                             const liked = getLikedItems();
                             liked.forEach(fid => {{
                                 const btn = document.getElementById('like-btn-' + fid);
@@ -691,6 +686,21 @@ with tab2:
                         }}
 
                         initApp();
+
+                        function navigateTop(queryString) {{
+                            try {{
+                                const topWin = window.top || window.parent;
+                                const targetUrl = topWin.location.origin + topWin.location.pathname + queryString;
+                                const a = document.createElement('a');
+                                a.href = targetUrl;
+                                a.target = '_top';
+                                document.body.appendChild(a);
+                                a.click();
+                                a.remove();
+                            }} catch(err) {{
+                                window.location.href = queryString;
+                            }}
+                        }}
 
                         function toggleLike(e, fid) {{
                             if (e) e.stopPropagation();
@@ -733,7 +743,7 @@ with tab2:
                             }}
 
                             setTimeout(() => {{
-                                window.parent.location.search = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
+                                navigateTop('?like_id=' + fid + '&action=' + action + '&_t=' + Date.now());
                             }}, 300);
                         }}
 
@@ -755,7 +765,7 @@ with tab2:
                         }}
 
                         function openModal(fullImg, previewUrl, isVideo) {{
-                            const parentWin = window.parent;
+                            const parentWin = window.top || window.parent;
                             const parentDoc = parentWin.document;
                             
                             parentWin.closeWeddingModal = function() {{
@@ -836,7 +846,7 @@ with tab2:
                                 ids.push(cb.getAttribute('data-id'));
                             }});
                             if (ids.length > 0) {{
-                                window.parent.location.search = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
+                                navigateTop('?zip_ids=' + ids.join(',') + '&_t=' + Date.now());
                             }}
                         }}
 
@@ -848,7 +858,7 @@ with tab2:
                                 try {{
                                     window.localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
                                 }} catch(e) {{}}
-                                window.parent.location.search = '?delete_id=' + fid + '&_t=' + Date.now();
+                                navigateTop('?delete_id=' + fid + '&_t=' + Date.now());
                             }}
                         }}
                     </script>

@@ -24,6 +24,9 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
 
+if 'uploader_key' not in st.session_state:
+    st.session_state.uploader_key = 0
+
 def create_drive_service():
     """Create a fresh Google Drive service with clean SSL socket settings."""
     creds = Credentials(
@@ -71,11 +74,16 @@ with tab1:
     st.header("Upload Photos & Videos")
     st.write("Tap below to choose files from your phone library or camera:")
     
+    if "upload_msg" in st.session_state:
+        st.success(st.session_state.upload_msg)
+        del st.session_state.upload_msg
+
     uploaded_files = st.file_uploader(
         "Choose files from gallery", 
         type=["jpg", "jpeg", "png", "heic", "mp4", "mov"],
         accept_multiple_files=True,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key=f"uploader_{st.session_state.uploader_key}"
     )
     guest_name = st.text_input("Your Name / Family (Optional)")
 
@@ -143,12 +151,16 @@ with tab1:
                 
                 status_text.empty()
                 progress_bar.empty()
-                if success_count > 0:
-                    st.success(f"Successfully uploaded {success_count} of {total_files} memories!")
+                
                 if failed_files:
                     st.error(f"Failed to upload {len(failed_files)} file(s):")
                     for fname, err in failed_files:
                         st.write(f"- **{fname}**: {err}")
+                
+                if success_count > 0:
+                    st.session_state.upload_msg = f"Successfully uploaded {success_count} of {total_files} memories!"
+                    st.session_state.uploader_key += 1
+                    st.rerun()
 
 with tab2:
     st.header("Wedding Gallery")
@@ -229,7 +241,7 @@ with tab2:
                     fid = file.get('id')
                     mime = file.get('mimeType', '')
                     thumb_small = file.get('thumbnailLink', '').replace('=s220', '=s400')
-                    full_image = file.get('thumbnailLink', '').replace('=s220', '=s1200')
+                    full_image = file.get('thumbnailLink', '').replace('=s220', '=s1600')
                     preview_url = f"https://drive.google.com/file/d/{fid}/preview"
                     is_mine = fid in st.session_state.my_uploads
                     is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
@@ -364,48 +376,60 @@ with tab2:
                         position: fixed;
                         top: 0; left: 0;
                         width: 100vw; height: 100vh;
-                        background: rgba(0, 0, 0, 0.92);
-                        z-index: 9999;
+                        background: #000;
+                        z-index: 99999;
                         justify-content: center;
                         align-items: center;
-                        padding: 10px;
                     }}
+                    
+                    /* FULLSCREEN MODAL ELEMENT STYLING */
+                    .modal-overlay:fullscreen, .modal-overlay:-webkit-full-screen {{
+                        width: 100vw !important;
+                        height: 100vh !important;
+                        background: #000 !important;
+                        display: flex !important;
+                        justify-content: center !important;
+                        align-items: center !important;
+                    }}
+
                     .modal-content-wrapper {{
                         position: relative;
-                        max-width: 95%;
-                        max-height: 90vh;
+                        width: 100vw;
+                        height: 100vh;
                         display: flex;
                         justify-content: center;
                         align-items: center;
                     }}
                     .modal-img {{
-                        max-width: 100%;
-                        max-height: 85vh;
+                        max-width: 100vw;
+                        max-height: 100vh;
+                        width: auto;
+                        height: auto;
                         object-fit: contain;
-                        border-radius: 6px;
                     }}
                     .modal-iframe {{
-                        width: 85vw;
-                        height: 70vh;
+                        width: 100vw;
+                        height: 100vh;
                         border: none;
-                        border-radius: 6px;
                         background: #000;
                     }}
                     .close-modal-btn {{
                         position: absolute;
-                        top: -38px;
-                        right: 0px;
+                        top: 16px;
+                        right: 16px;
                         color: #fff;
-                        font-size: 26px;
+                        font-size: 22px;
                         font-weight: bold;
                         cursor: pointer;
-                        background: rgba(255,255,255,0.2);
+                        background: rgba(0, 0, 0, 0.7);
+                        border: 1px solid rgba(255, 255, 255, 0.4);
                         border-radius: 50%;
-                        width: 32px;
-                        height: 32px;
+                        width: 38px;
+                        height: 38px;
                         display: flex;
                         align-items: center;
                         justify-content: center;
+                        z-index: 100000;
                     }}
                 </style>
                 </head>
@@ -423,7 +447,7 @@ with tab2:
                     <div id="lightbox" class="modal-overlay" onclick="closeModal()">
                         <div class="modal-content-wrapper" onclick="event.stopPropagation()">
                             <div class="close-modal-btn" onclick="closeModal()">✕</div>
-                            <div id="modal-body"></div>
+                            <div id="modal-body" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;"></div>
                         </div>
                     </div>
 
@@ -433,11 +457,18 @@ with tab2:
                             const modalBody = document.getElementById('modal-body');
                             
                             if (isVideo) {{
-                                modalBody.innerHTML = '<iframe src="' + previewUrl + '" class="modal-iframe" allow="autoplay"></iframe>';
+                                modalBody.innerHTML = '<iframe src="' + previewUrl + '" class="modal-iframe" allow="autoplay; fullscreen"></iframe>';
                             }} else {{
                                 modalBody.innerHTML = '<img src="' + fullImg + '" class="modal-img" />';
                             }}
                             lightbox.style.display = 'flex';
+
+                            // Trigger Fullscreen API to occupy full mobile display
+                            if (lightbox.requestFullscreen) {{
+                                lightbox.requestFullscreen().catch(err => {{}});
+                            }} else if (lightbox.webkitRequestFullscreen) {{
+                                lightbox.webkitRequestFullscreen();
+                            }}
                         }}
 
                         function closeModal() {{
@@ -445,6 +476,14 @@ with tab2:
                             const modalBody = document.getElementById('modal-body');
                             lightbox.style.display = 'none';
                             modalBody.innerHTML = '';
+
+                            if (document.fullscreenElement || document.webkitFullscreenElement) {{
+                                if (document.exitFullscreen) {{
+                                    document.exitFullscreen().catch(err => {{}});
+                                }} else if (document.webkitExitFullscreen) {{
+                                    document.webkitExitFullscreen();
+                                }}
+                            }}
                         }}
 
                         function updateCount(e) {{

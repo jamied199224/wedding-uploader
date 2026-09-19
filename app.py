@@ -24,8 +24,13 @@ st.set_page_config(
 
 TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
+# Initialize session state for browser-locked permissions
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
+if 'my_uploads' not in st.session_state:
+    st.session_state.my_uploads = []
+if 'my_likes' not in st.session_state:
+    st.session_state.my_likes = set()
 
 def get_credentials():
     """Retrieve and refresh Google OAuth credentials."""
@@ -236,7 +241,7 @@ spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, 
 if drive_service and sheets_service and not spreadsheet_id:
     st.warning("⚠️ Warning: Could not locate or create 'wedding_likes_db' Google Sheet in the target folder. Likes may not persist.")
 
-# --- HANDLE QUERY PARAMS (Delete, Like, & ZIP actions) ---
+# --- HANDLE QUERY PARAMS (Delete & Like actions) ---
 params = st.query_params
 del_id = params.get("delete_id")
 like_id = params.get("like_id")
@@ -246,6 +251,8 @@ if del_id and drive_service:
         drive_service.files().delete(fileId=del_id).execute()
         if spreadsheet_id and sheets_service:
             remove_file_from_sheet(sheets_service, spreadsheet_id, del_id)
+        if del_id in st.session_state.my_uploads:
+            st.session_state.my_uploads.remove(del_id)
         st.success("Memory deleted!")
     except Exception as e:
         st.error(f"Delete failed: {e}")
@@ -254,9 +261,13 @@ if del_id and drive_service:
 
 if like_id and sheets_service and spreadsheet_id:
     action = params.get("action", "like")
-    delta = 1 if action == "like" else -1
     try:
-        update_like_in_sheet(sheets_service, spreadsheet_id, like_id, delta)
+        if action == "like" and like_id not in st.session_state.my_likes:
+            st.session_state.my_likes.add(like_id)
+            update_like_in_sheet(sheets_service, spreadsheet_id, like_id, 1)
+        elif action == "unlike" and like_id in st.session_state.my_likes:
+            st.session_state.my_likes.remove(like_id)
+            update_like_in_sheet(sheets_service, spreadsheet_id, like_id, -1)
     except Exception as e:
         st.error(f"Like update failed: {e}")
     st.query_params.clear()
@@ -297,7 +308,6 @@ with tab1:
                 failed_files = []
                 
                 clean_guest_name = guest_name.strip() if guest_name and guest_name.strip() else "Guest"
-                newly_uploaded_ids = []
                 
                 for index, uploaded_file in enumerate(uploaded_files):
                     file_raw = uploaded_file.getvalue()
@@ -319,7 +329,8 @@ with tab1:
                                 TARGET_FOLDER_ID
                             )
                             if file_id:
-                                newly_uploaded_ids.append(file_id)
+                                if file_id not in st.session_state.my_uploads:
+                                    st.session_state.my_uploads.append(file_id)
                                 if spreadsheet_id and sheets_service:
                                     update_like_in_sheet(sheets_service, spreadsheet_id, file_id, 0)
                             uploaded_successfully = True
@@ -342,7 +353,6 @@ with tab1:
                         st.write(f"- **{fname}**: {err}")
                 
                 if success_count > 0:
-                    st.session_state.new_uploads = newly_uploaded_ids
                     st.session_state.upload_msg = f"Successfully uploaded {success_count} of {total_files} memories!"
                     st.session_state.uploader_key += 1
                     st.rerun()
@@ -414,11 +424,6 @@ with tab2:
             files = results.get('files', [])
             likes_dict = load_likes_from_sheet(sheets_service, spreadsheet_id) if spreadsheet_id else {}
 
-            recent_uploads_json = "[]"
-            if "new_uploads" in st.session_state:
-                recent_uploads_json = json.dumps(st.session_state.new_uploads)
-                del st.session_state.new_uploads
-
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
@@ -433,6 +438,8 @@ with tab2:
                     is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
                     
                     likes_count = int(likes_dict.get(fid, 0))
+                    is_liked = fid in st.session_state.my_likes
+                    is_mine = fid in st.session_state.my_uploads
                     
                     if '_' in raw_title:
                         uploader_name = raw_title.split('_', 1)[0].strip()
@@ -449,10 +456,10 @@ with tab2:
                     html_items.append(f'''
                     <div class="grid-card" id="card-{fid}" data-fid="{fid}">
                         <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount(event)" />
-                        <a href="?like_id={fid}&action=like" target="_top" class="like-btn" id="like-btn-{fid}" title="Like memory" onclick="handleLikeClick(event, \'{fid}\')">
+                        <button class="like-btn {'liked' if is_liked else ''}" id="like-btn-{fid}" title="Like memory" onclick="toggleLike(event, \'{fid}\', {'true' if is_liked else 'false'})">
                             ❤️ <span id="like-count-{fid}">{likes_count}</span>
-                        </a>
-                        <a href="?delete_id={fid}" target="_top" class="delete-btn" id="del-btn-{fid}" title="Delete Photo" onclick="return handleDeleteClick(event, \'{fid}\')" style="display:none;">🗑️</a>
+                        </button>
+                        <button class="delete-btn" id="del-btn-{fid}" title="Delete Photo" onclick="deleteItem(event, \'{fid}\')" style="{'display:flex;' if is_mine else 'display:none;'}">🗑️</button>
                         <div class="card-link" onclick="handleCardClick(event, \'{fid}\', \'{full_image}\', \'{preview_url}\', {'true' if is_video else 'false'})">
                             {media_content}
                         </div>
@@ -557,7 +564,6 @@ with tab2:
                         gap: 3px;
                         line-height: 1;
                         font-family: inherit;
-                        text-decoration: none;
                         transition: transform 0.15s ease, background 0.15s ease;
                     }}
                     
@@ -599,7 +605,6 @@ with tab2:
                         display: flex;
                         align-items: center;
                         justify-content: center;
-                        text-decoration: none;
                     }}
                     
                     .action-bar {{
@@ -644,112 +649,20 @@ with tab2:
                         let clickTimers = {{}};
                         let tapCounts = {{}};
 
-                        function getMyUploads() {{
-                            try {{
-                                return JSON.parse(window.localStorage.getItem('my_wedding_uploads') || '[]');
-                            }} catch(e) {{
-                                return [];
-                            }}
-                        }}
-
-                        function getLikedItems() {{
-                            try {{
-                                return JSON.parse(window.localStorage.getItem('liked_wedding_photos') || '[]');
-                            }} catch(e) {{
-                                return [];
-                            }}
-                        }}
-
-                        function setLikedItems(items) {{
-                            try {{
-                                window.localStorage.setItem('liked_wedding_photos', JSON.stringify(items));
-                            }} catch(e) {{}}
-                        }}
-
-                        function initApp() {{
-                            let mine = getMyUploads();
-                            const newlyUploaded = {recent_uploads_json};
-                            if (newlyUploaded && newlyUploaded.length > 0) {{
-                                newlyUploaded.forEach(id => {{
-                                    if (!mine.includes(id)) mine.push(id);
-                                }});
-                                try {{
-                                    window.localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
-                                }} catch(e) {{}}
-                            }}
-
-                            mine.forEach(fid => {{
-                                const delBtn = document.getElementById('del-btn-' + fid);
-                                if (delBtn) delBtn.style.display = 'flex';
-                            }});
-
-                            const liked = getLikedItems();
-                            liked.forEach(fid => {{
-                                const btn = document.getElementById('like-btn-' + fid);
-                                if (btn) btn.classList.add('liked');
-                            }});
-                        }}
-
-                        initApp();
-
-                        function handleLikeClick(e, fid) {{
+                        function toggleLike(e, fid, isLiked) {{
                             if (e) e.stopPropagation();
-
-                            const card = document.getElementById('card-' + fid);
-                            const countSpan = document.getElementById('like-count-' + fid);
-                            const likeBtn = document.getElementById('like-btn-' + fid);
-
-                            let likedList = getLikedItems();
-                            const alreadyLiked = likedList.includes(fid);
-                            let action = "like";
-
-                            if (!alreadyLiked) {{
-                                likedList.push(fid);
-                                setLikedItems(likedList);
-                                action = "like";
-
-                                if (card) {{
-                                    const burst = document.createElement('div');
-                                    burst.className = 'pop-heart';
-                                    burst.innerText = '❤️';
-                                    card.appendChild(burst);
-                                    setTimeout(() => burst.remove(), 650);
-                                }}
-                                if (likeBtn) likeBtn.classList.add('liked');
-                                if (countSpan) {{
-                                    const cur = parseInt(countSpan.innerText || '0');
-                                    countSpan.innerText = cur + 1;
-                                }}
-                            }} else {{
-                                likedList = likedList.filter(id => id !== fid);
-                                setLikedItems(likedList);
-                                action = "unlike";
-
-                                if (likeBtn) likeBtn.classList.remove('liked');
-                                if (countSpan) {{
-                                    const cur = parseInt(countSpan.innerText || '0');
-                                    countSpan.innerText = Math.max(0, cur - 1);
-                                }}
-                            }}
-
-                            // Update the link href dynamically before top-level navigation occurs
-                            e.currentTarget.href = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
+                            const action = isLiked ? "unlike" : "like";
+                            window.parent.location.search = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
                         }}
 
-                        function handleDeleteClick(e, fid) {{
+                        function deleteItem(e, fid) {{
                             if (e) e.stopPropagation();
-                            if (!confirm("Delete this photo from the album?")) {{
-                                return false;
+                            if (confirm("Delete this photo from the album?")) {{
+                                window.parent.location.search = '?delete_id=' + fid + '&_t=' + Date.now();
                             }}
-                            let mine = getMyUploads();
-                            mine = mine.filter(id => id !== fid);
-                            try {{
-                                window.localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
-                            }} catch(e) {{}}
-                            return true;
                         }}
 
-                        function handleCardClick(e, fid, fullImg, previewUrl, isVideo) {{
+                        function handleCardClick(e, fid, fullImg, previewUrl, isVideo, isLiked) {{
                             if (e) e.stopPropagation();
                             
                             tapCounts[fid] = (tapCounts[fid] || 0) + 1;
@@ -762,16 +675,12 @@ with tab2:
                             }} else if (tapCounts[fid] === 2) {{
                                 clearTimeout(clickTimers[fid]);
                                 tapCounts[fid] = 0;
-                                // Trigger like click programmatically
-                                const likeBtn = document.getElementById('like-btn-' + fid);
-                                if (likeBtn) {{
-                                    likeBtn.click();
-                                }}
+                                toggleLike(null, fid, isLiked);
                             }}
                         }}
 
                         function openModal(fullImg, previewUrl, isVideo) {{
-                            const parentWin = window.top || window.parent;
+                            const parentWin = window.parent;
                             const parentDoc = parentWin.document;
                             
                             parentWin.closeWeddingModal = function() {{
@@ -852,18 +761,19 @@ with tab2:
                                 ids.push(cb.getAttribute('data-id'));
                             }});
                             if (ids.length > 0) {{
-                                const link = document.createElement('a');
-                                link.href = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
-                                link.target = '_top';
-                                document.body.appendChild(link);
-                                link.click();
-                                link.remove();
+                                window.parent.location.search = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
                             }}
                         }}
                     </script>
                 </body>
                 </html>
                 '''
+                
+                # Update click handler for cards with isLiked parameter
+                gallery_html = gallery_html.replace(
+                    'handleCardClick(event, \'{fid}\', \'{full_image}\', \'{preview_url}\', {\'true\' if is_video else \'false\'})',
+                    'handleCardClick(event, \'{fid}\', \'{full_image}\', \'{preview_url}\', {\'true\' if is_video else \'false\'}, {\'true\' if is_liked else \'false\'})'
+                )
                 
                 grid_rows = (len(files) + 2) // 3
                 calculated_height = (grid_rows * 145) + 90

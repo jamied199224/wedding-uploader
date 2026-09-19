@@ -30,6 +30,10 @@ if 'my_uploads' not in st.session_state:
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 
+# In-memory cache to bypass Google Drive replication lag
+if 'likes_cache' not in st.session_state:
+    st.session_state.likes_cache = {}
+
 def get_credentials():
     """Retrieve and refresh Google OAuth credentials."""
     creds = Credentials(
@@ -106,6 +110,8 @@ if "delete_id" in params and drive_service:
         drive_service.files().delete(fileId=del_id).execute()
         if del_id in st.session_state.my_uploads:
             st.session_state.my_uploads.remove(del_id)
+        if del_id in st.session_state.likes_cache:
+            del st.session_state.likes_cache[del_id]
         st.success("Memory deleted!")
     except Exception as e:
         st.error(f"Delete failed: {e}")
@@ -118,16 +124,24 @@ if "like_id" in params and drive_service:
     like_id = params["like_id"]
     action = params.get("action", "like")
     try:
-        # Fetch file appProperties directly
+        # Fetch current appProperties from Drive
         file_meta = drive_service.files().get(fileId=like_id, fields="appProperties").execute()
         props = file_meta.get('appProperties', {}) or {}
-        current_likes = int(props.get('likes', '0'))
+        drive_likes = int(props.get('likes', '0'))
+        
+        # Use cache if available and higher, to prevent race conditions with stale Drive index
+        cached_likes = st.session_state.likes_cache.get(like_id, drive_likes)
+        base_likes = max(drive_likes, cached_likes)
         
         if action == "like":
-            new_likes = current_likes + 1
+            new_likes = base_likes + 1
         else:
-            new_likes = max(0, current_likes - 1)
+            new_likes = max(0, base_likes - 1)
             
+        # Update local session cache immediately
+        st.session_state.likes_cache[like_id] = new_likes
+        
+        # Update Google Drive backend
         props['likes'] = str(new_likes)
         drive_service.files().update(
             fileId=like_id,
@@ -198,6 +212,7 @@ with tab1:
                             )
                             if file_id and file_id not in st.session_state.my_uploads:
                                 st.session_state.my_uploads.append(file_id)
+                            st.session_state.likes_cache[file_id] = 0
                             uploaded_successfully = True
                             success_count += 1
                             break
@@ -315,9 +330,14 @@ with tab2:
                     
                     app_props = file.get('appProperties', {}) or {}
                     try:
-                        likes_count = int(app_props.get('likes', '0'))
+                        drive_likes = int(app_props.get('likes', '0'))
                     except ValueError:
-                        likes_count = 0
+                        drive_likes = 0
+                    
+                    # Use cached likes if available to override any Google Drive replication delay
+                    cached_likes = st.session_state.likes_cache.get(fid, drive_likes)
+                    likes_count = max(drive_likes, cached_likes)
+                    st.session_state.likes_cache[fid] = likes_count
                     
                     if '_' in raw_title:
                         uploader_name = raw_title.split('_', 1)[0].strip()

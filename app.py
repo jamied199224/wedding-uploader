@@ -72,7 +72,8 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
     }
     metadata = {
         'name': file_name,
-        'parents': [folder_id]
+        'parents': [folder_id],
+        'properties': {'likes': '0'}
     }
     
     init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=60)
@@ -97,7 +98,7 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
 
 drive_service = get_google_services()
 
-# --- HANDLE QUERY PARAMS (Delete actions) ---
+# --- HANDLE QUERY PARAMS (Delete & Like actions) ---
 params = st.query_params
 
 if "delete_id" in params and drive_service:
@@ -110,6 +111,23 @@ if "delete_id" in params and drive_service:
     except Exception as e:
         st.error(f"Delete failed: {e}")
     del st.query_params["delete_id"]
+    st.rerun()
+
+if "like_id" in params and drive_service:
+    like_id = params["like_id"]
+    try:
+        f_item = drive_service.files().get(fileId=like_id, fields="properties").execute()
+        current_props = f_item.get("properties") or {}
+        current_likes = int(current_props.get("likes", "0"))
+        current_props["likes"] = str(current_likes + 1)
+        
+        drive_service.files().update(
+            fileId=like_id,
+            body={"properties": current_props}
+        ).execute()
+    except Exception as e:
+        st.error(f"Like update failed: {e}")
+    del st.query_params["like_id"]
     st.rerun()
 
 st.title("💍 Jamie & Millie's Wedding Album")
@@ -256,7 +274,7 @@ with tab2:
                     results = active_service.files().list(
                         q=query,
                         pageSize=100,
-                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
+                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType, properties)",
                         orderBy="createdTime desc"
                     ).execute()
                     break
@@ -281,6 +299,10 @@ with tab2:
                     is_mine = fid in st.session_state.my_uploads
                     is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
                     
+                    # Read properties for likes count
+                    props = file.get('properties') or {}
+                    likes_count = int(props.get('likes', '0'))
+                    
                     # Extract uploader name from file title prefix
                     if '_' in raw_title:
                         uploader_name = raw_title.split('_', 1)[0].strip()
@@ -299,6 +321,9 @@ with tab2:
                     html_items.append(f'''
                     <div class="grid-card">
                         <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount(event)" />
+                        <button class="like-btn" title="Like memory" onclick="likeItem(event, \'{fid}\')">
+                            ❤️ <span>{likes_count}</span>
+                        </button>
                         {delete_html}
                         <div class="card-link" onclick="openModal('{full_image}', '{preview_url}', {'true' if is_video else 'false'})">
                             {media_content}
@@ -384,6 +409,32 @@ with tab2:
                         height: 22px;
                         accent-color: #1a73e8;
                         cursor: pointer;
+                    }}
+
+                    /* TOP-CENTER OVERLAY: LIKE BUTTON & COUNT */
+                    .like-btn {{
+                        position: absolute;
+                        top: 6px;
+                        left: 50%;
+                        transform: translateX(-50%);
+                        z-index: 10;
+                        background: rgba(0, 0, 0, 0.65);
+                        border: 1px solid rgba(255, 255, 255, 0.8);
+                        border-radius: 12px;
+                        color: #ffffff;
+                        font-size: 11px;
+                        padding: 2px 7px;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        gap: 3px;
+                        line-height: 1;
+                        font-family: inherit;
+                    }}
+                    
+                    .like-btn:hover {{
+                        background: rgba(0, 0, 0, 0.88);
+                        transform: translateX(-50%) scale(1.05);
                     }}
 
                     /* TOP-RIGHT OVERLAY: DELETE BUTTON */
@@ -474,7 +525,6 @@ with tab2:
 
                             overlay.innerHTML = '';
 
-                            // Create distinct Close Button element directly in parent window
                             const closeBtn = parentDoc.createElement('button');
                             closeBtn.id = 'wedding-modal-close-btn';
                             closeBtn.innerHTML = '✕';
@@ -519,6 +569,11 @@ with tab2:
                             const btn = document.getElementById('dl-btn');
                             countText.innerText = checked.length + " item(s) selected";
                             btn.disabled = checked.length === 0;
+                        }}
+
+                        function likeItem(e, fid) {{
+                            if (e) e.stopPropagation();
+                            window.parent.location.search = '?like_id=' + fid;
                         }}
 
                         function prepareZipDownload() {{

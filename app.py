@@ -1,5 +1,5 @@
 import streamlit as st
-from google.oauth2.credentials import Credentials
+from google.oauth2.credentials Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
@@ -10,6 +10,9 @@ st.set_page_config(
     page_icon="💍",
     layout="centered"
 )
+
+# --- TARGET GOOGLE DRIVE FOLDER ID ---
+TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
 # --- PERSONAL TOUCH: PHOTO & TITLE ---
 # st.image("millie_and_jamie.jpg", width=300) 
@@ -65,7 +68,8 @@ with tab1:
                     status_text.text(f"Uploading file {index + 1} of {total_files}: {uploaded_file.name}...")
                     try:
                         file_metadata = {
-                            'name': f"{guest_name or 'Guest'}_{uploaded_file.name}"
+                            'name': f"{guest_name or 'Guest'}_{uploaded_file.name}",
+                            'parents': [TARGET_FOLDER_ID]  # Routes straight to your specific folder
                         }
                         media = MediaIoBaseUpload(
                             io.BytesIO(uploaded_file.getvalue()),
@@ -82,7 +86,6 @@ with tab1:
                         
                         success_count += 1
                     except Exception as e:
-                        # Catch connection drops or bad files individually so it doesn't crash the app
                         failed_files.append((uploaded_file.name, str(e)))
                     
                     progress_bar.progress((index + 1) / total_files)
@@ -94,7 +97,7 @@ with tab1:
                     st.success(f"Thank you! Successfully uploaded {success_count} of {total_files} memories.")
                 
                 if failed_files:
-                    st.warning(f"Failed to upload {len(failed_files)} file(s):")
+                    st.warning(f"Failed to upload {len(failed_files)} file(s) due to connection limits. Try a smaller batch.")
                     for fname, err in failed_files:
                         st.text(f"- {fname}: {err}")
 
@@ -104,7 +107,11 @@ with tab2:
     
     if drive_service:
         try:
+            # Query files specifically inside your designated folder
+            query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
+            
             results = drive_service.files().list(
+                q=query,
                 pageSize=50,
                 fields="files(id, name, webViewLink, thumbnailLink, mimeType)",
                 orderBy="createdTime desc"

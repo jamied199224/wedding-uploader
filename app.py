@@ -449,10 +449,10 @@ with tab2:
                     html_items.append(f'''
                     <div class="grid-card" id="card-{fid}" data-fid="{fid}">
                         <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount(event)" />
-                        <button class="like-btn" id="like-btn-{fid}" title="Like memory" onclick="toggleLike(event, \'{fid}\')">
+                        <a href="?like_id={fid}&action=like" target="_top" class="like-btn" id="like-btn-{fid}" title="Like memory" onclick="handleLikeClick(event, \'{fid}\')">
                             ❤️ <span id="like-count-{fid}">{likes_count}</span>
-                        </button>
-                        <button class="delete-btn" id="del-btn-{fid}" title="Delete Photo" onclick="deleteItem(event, \'{fid}\')" style="display:none;">🗑️</button>
+                        </a>
+                        <a href="?delete_id={fid}" target="_top" class="delete-btn" id="del-btn-{fid}" title="Delete Photo" onclick="return handleDeleteClick(event, \'{fid}\')" style="display:none;">🗑️</a>
                         <div class="card-link" onclick="handleCardClick(event, \'{fid}\', \'{full_image}\', \'{preview_url}\', {'true' if is_video else 'false'})">
                             {media_content}
                         </div>
@@ -557,6 +557,7 @@ with tab2:
                         gap: 3px;
                         line-height: 1;
                         font-family: inherit;
+                        text-decoration: none;
                         transition: transform 0.15s ease, background 0.15s ease;
                     }}
                     
@@ -598,6 +599,7 @@ with tab2:
                         display: flex;
                         align-items: center;
                         justify-content: center;
+                        text-decoration: none;
                     }}
                     
                     .action-bar {{
@@ -665,7 +667,6 @@ with tab2:
                         }}
 
                         function initApp() {{
-                            // 1. Handle device-locked deletes (only show delete button if uploaded on this browser)
                             let mine = getMyUploads();
                             const newlyUploaded = {recent_uploads_json};
                             if (newlyUploaded && newlyUploaded.length > 0) {{
@@ -682,7 +683,6 @@ with tab2:
                                 if (delBtn) delBtn.style.display = 'flex';
                             }});
 
-                            // 2. Sync one-like-per-browser state
                             const liked = getLikedItems();
                             liked.forEach(fid => {{
                                 const btn = document.getElementById('like-btn-' + fid);
@@ -692,7 +692,7 @@ with tab2:
 
                         initApp();
 
-                        function toggleLike(e, fid) {{
+                        function handleLikeClick(e, fid) {{
                             if (e) e.stopPropagation();
 
                             const card = document.getElementById('card-' + fid);
@@ -732,13 +732,21 @@ with tab2:
                                 }}
                             }}
 
-                            setTimeout(() => {{
-                                try {{
-                                    window.top.location.href = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
-                                }} catch(err) {{
-                                    window.location.href = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
-                                }}
-                            }}, 300);
+                            // Update the link href dynamically before top-level navigation occurs
+                            e.currentTarget.href = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
+                        }}
+
+                        function handleDeleteClick(e, fid) {{
+                            if (e) e.stopPropagation();
+                            if (!confirm("Delete this photo from the album?")) {{
+                                return false;
+                            }}
+                            let mine = getMyUploads();
+                            mine = mine.filter(id => id !== fid);
+                            try {{
+                                window.localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
+                            }} catch(e) {{}}
+                            return true;
                         }}
 
                         function handleCardClick(e, fid, fullImg, previewUrl, isVideo) {{
@@ -754,7 +762,11 @@ with tab2:
                             }} else if (tapCounts[fid] === 2) {{
                                 clearTimeout(clickTimers[fid]);
                                 tapCounts[fid] = 0;
-                                toggleLike(null, fid);
+                                // Trigger like click programmatically
+                                const likeBtn = document.getElementById('like-btn-' + fid);
+                                if (likeBtn) {{
+                                    likeBtn.click();
+                                }}
                             }}
                         }}
 
@@ -840,27 +852,12 @@ with tab2:
                                 ids.push(cb.getAttribute('data-id'));
                             }});
                             if (ids.length > 0) {{
-                                try {{
-                                    window.top.location.href = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
-                                }} catch(err) {{
-                                    window.location.href = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
-                                }}
-                            }}
-                        }}
-
-                        function deleteItem(e, fid) {{
-                            if (e) e.stopPropagation();
-                            if (confirm("Delete this photo from the album?")) {{
-                                let mine = getMyUploads();
-                                mine = mine.filter(id => id !== fid);
-                                try {{
-                                    window.localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
-                                }} catch(e) {{}}
-                                try {{
-                                    window.top.location.href = '?delete_id=' + fid + '&_t=' + Date.now();
-                                }} catch(err) {{
-                                    window.location.href = '?delete_id=' + fid + '&_t=' + Date.now();
-                                }}
+                                const link = document.createElement('a');
+                                link.href = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
+                                link.target = '_top';
+                                document.body.appendChild(link);
+                                link.click();
+                                link.remove();
                             }}
                         }}
                     </script>

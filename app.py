@@ -2,14 +2,12 @@ import streamlit as st
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
-import httplib2
 import io
 import socket
-import ssl
 import time
 import zipfile
 
-# Prevent infinite socket hanging globally
+# Set global socket timeout to 120s to prevent indefinite hangs
 socket.setdefaulttimeout(120)
 
 st.set_page_config(
@@ -33,9 +31,7 @@ def get_google_services():
             client_secret=st.secrets["client_secret"],
             token_uri="https://oauth2.googleapis.com/token",
         )
-        # Explicit timeout on httplib2 to stop upload freezes
-        http_auth = creds.authorize(httplib2.Http(timeout=120))
-        drive_service = build('drive', 'v3', http=http_auth)
+        drive_service = build('drive', 'v3', credentials=creds)
         return drive_service
     except Exception as e:
         st.error(f"Failed to authenticate with Google: {e}")
@@ -101,15 +97,12 @@ with tab1:
                                 'parents': [TARGET_FOLDER_ID]
                             }
                             
-                            # Use 2MB chunking for files > 5MB, standard upload for small images
-                            is_large = file_size_mb > 5
-                            chunk_size = 2 * 1024 * 1024 if is_large else -1
-                            
+                            # Stream in 2MB chunks for resumable uploads
                             media = MediaIoBaseUpload(
                                 io.BytesIO(file_raw),
                                 mimetype=uploaded_file.type or 'application/octet-stream',
-                                chunksize=chunk_size,
-                                resumable=is_large
+                                chunksize=2 * 1024 * 1024,
+                                resumable=True
                             )
                             
                             request = drive_service.files().create(
@@ -119,14 +112,11 @@ with tab1:
                             )
                             
                             response = None
-                            if is_large:
-                                while response is None:
-                                    status, response = request.next_chunk()
-                                    if status:
-                                        pct = int(status.progress() * 100)
-                                        status_text.text(f"Uploading {index + 1}/{total_files}: {uploaded_file.name} ({pct}%)...")
-                            else:
-                                response = request.execute()
+                            while response is None:
+                                status, response = request.next_chunk()
+                                if status:
+                                    pct = int(status.progress() * 100)
+                                    status_text.text(f"Uploading {index + 1}/{total_files}: {uploaded_file.name} ({pct}%)...")
 
                             file_id = response.get('id')
                             if file_id and file_id not in st.session_state.my_uploads:
@@ -136,7 +126,7 @@ with tab1:
                             break
                         except Exception as e:
                             last_err = e
-                            time.sleep(2)  # Wait 2 seconds before retry
+                            time.sleep(2)
                     
                     if not uploaded_successfully:
                         failed_files.append((uploaded_file.name, str(last_err)))

@@ -733,11 +733,7 @@ with tab2:
                             }}
 
                             setTimeout(() => {{
-                                try {{
-                                    window.top.location.href = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
-                                }} catch(err) {{
-                                    window.location.href = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
-                                }}
+                                window.parent.location.search = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
                             }}, 300);
                         }}
 
@@ -759,7 +755,7 @@ with tab2:
                         }}
 
                         function openModal(fullImg, previewUrl, isVideo) {{
-                            const parentWin = window.top || window.parent;
+                            const parentWin = window.parent;
                             const parentDoc = parentWin.document;
                             
                             parentWin.closeWeddingModal = function() {{
@@ -840,11 +836,7 @@ with tab2:
                                 ids.push(cb.getAttribute('data-id'));
                             }});
                             if (ids.length > 0) {{
-                                try {{
-                                    window.top.location.href = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
-                                }} catch(err) {{
-                                    window.location.href = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
-                                }}
+                                window.parent.location.search = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
                             }}
                         }}
 
@@ -856,11 +848,7 @@ with tab2:
                                 try {{
                                     window.localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
                                 }} catch(e) {{}}
-                                try {{
-                                    window.top.location.href = '?delete_id=' + fid + '&_t=' + Date.now();
-                                }} catch(err) {{
-                                    window.location.href = '?delete_id=' + fid + '&_t=' + Date.now();
-                                }}
+                                window.parent.location.search = '?delete_id=' + fid + '&_t=' + Date.now();
                             }}
                         }}
                     </script>

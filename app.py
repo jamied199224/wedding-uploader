@@ -115,15 +115,22 @@ if "like_id" in params and drive_service:
     like_id = params["like_id"]
     action = params.get("action", "like")
     try:
+        # Fetch directly from Drive to ensure latest global count across all devices
         f_item = drive_service.files().get(fileId=like_id, fields="properties").execute()
         current_props = f_item.get("properties") or {}
-        current_likes = int(current_props.get("likes", "0"))
         
-        if action == "like":
-            current_props["likes"] = str(current_likes + 1)
-        elif action == "unlike":
-            current_props["likes"] = str(max(0, current_likes - 1))
+        try:
+            current_likes = int(current_props.get("likes", "0"))
+        except ValueError:
+            current_likes = 0
             
+        if action == "like":
+            new_likes = current_likes + 1
+        else:
+            new_likes = max(0, current_likes - 1)
+            
+        current_props["likes"] = str(new_likes)
+        
         drive_service.files().update(
             fileId=like_id,
             body={"properties": current_props}
@@ -308,7 +315,10 @@ with tab2:
                     is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
                     
                     props = file.get('properties') or {}
-                    likes_count = int(props.get('likes', '0'))
+                    try:
+                        likes_count = int(props.get('likes', '0'))
+                    except ValueError:
+                        likes_count = 0
                     
                     if '_' in raw_title:
                         uploader_name = raw_title.split('_', 1)[0].strip()
@@ -531,17 +541,20 @@ with tab2:
                             }} catch(e) {{}}
                         }}
 
-                        function isItemLiked(fid) {{
-                            return getLikedItems().includes(fid);
-                        }}
-
-                        document.addEventListener('DOMContentLoaded', () => {{
+                        // Synchronize button styling with this specific device's local memory
+                        function syncLocalLikes() {{
                             const liked = getLikedItems();
                             liked.forEach(fid => {{
                                 const btn = document.getElementById('like-btn-' + fid);
                                 if (btn) btn.classList.add('liked');
                             }});
-                        }});
+                        }}
+
+                        if (document.readyState === 'loading') {{
+                            document.addEventListener('DOMContentLoaded', syncLocalLikes);
+                        }} else {{
+                            syncLocalLikes();
+                        }}
 
                         function toggleLike(e, fid) {{
                             if (e) e.stopPropagation();
@@ -583,6 +596,7 @@ with tab2:
                                 }}
                             }}
 
+                            // Notify server via Streamlit query params to persist globally in Google Drive
                             setTimeout(() => {{
                                 window.parent.location.search = '?like_id=' + fid + '&action=' + action;
                             }}, 300);

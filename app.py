@@ -3,7 +3,6 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
-import time
 
 # Page configuration
 st.set_page_config(
@@ -13,9 +12,7 @@ st.set_page_config(
 )
 
 # --- PERSONAL TOUCH: PHOTO & TITLE ---
-# Uncomment and update the filename if you upload a picture of you and Millie to your repo:
 # st.image("millie_and_jamie.jpg", width=300) 
-
 st.title("💍 Jamie & Millie's Wedding Album")
 st.write("Welcome! Please share your favorite photos and videos from our special day with us, and browse memories uploaded so far.")
 
@@ -45,7 +42,6 @@ tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Guest Gallery"])
 with tab1:
     st.header("Upload Photos & Videos")
     
-    # accept_multiple_files allows selecting more than one file at a time
     uploaded_files = st.file_uploader(
         "Choose photos or videos", 
         type=["jpg", "jpeg", "png", "mp4", "mov"],
@@ -63,6 +59,7 @@ with tab1:
                 status_text = st.empty()
                 
                 success_count = 0
+                failed_files = []
                 
                 for index, uploaded_file in enumerate(uploaded_files):
                     status_text.text(f"Uploading file {index + 1} of {total_files}: {uploaded_file.name}...")
@@ -76,7 +73,7 @@ with tab1:
                             resumable=True
                         )
 
-                        # Upload to Drive securely within the sandbox boundary
+                        # Secure sandboxed Drive upload
                         file = drive_service.files().create(
                             body=file_metadata,
                             media_body=media,
@@ -85,14 +82,21 @@ with tab1:
                         
                         success_count += 1
                     except Exception as e:
-                        st.error(f"Failed to upload {uploaded_file.name}: {e}")
+                        # Catch connection drops or bad files individually so it doesn't crash the app
+                        failed_files.append((uploaded_file.name, str(e)))
                     
-                    # Update progress bar smoothly
                     progress_bar.progress((index + 1) / total_files)
                 
                 status_text.empty()
                 progress_bar.empty()
-                st.success(f"Thank you! Successfully uploaded {success_count} of {total_files} memories to our wedding album.")
+                
+                if success_count > 0:
+                    st.success(f"Thank you! Successfully uploaded {success_count} of {total_files} memories.")
+                
+                if failed_files:
+                    st.warning(f"Failed to upload {len(failed_files)} file(s):")
+                    for fname, err in failed_files:
+                        st.text(f"- {fname}: {err}")
 
 with tab2:
     st.header("Wedding Gallery")
@@ -100,7 +104,6 @@ with tab2:
     
     if drive_service:
         try:
-            # Query files created by the app securely
             results = drive_service.files().list(
                 pageSize=50,
                 fields="files(id, name, webViewLink, thumbnailLink, mimeType)",

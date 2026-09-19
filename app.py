@@ -69,7 +69,7 @@ with tab1:
                     try:
                         file_metadata = {
                             'name': f"{guest_name or 'Guest'}_{uploaded_file.name}",
-                            'parents': [TARGET_FOLDER_ID]  # Routes straight to your specific folder
+                            'parents': [TARGET_FOLDER_ID]
                         }
                         media = MediaIoBaseUpload(
                             io.BytesIO(uploaded_file.getvalue()),
@@ -77,11 +77,10 @@ with tab1:
                             resumable=True
                         )
 
-                        # Secure sandboxed Drive upload
                         file = drive_service.files().create(
                             body=file_metadata,
                             media_body=media,
-                            fields='id, webViewLink, thumbnailLink'
+                            fields='id, webViewLink'
                         ).execute()
                         
                         success_count += 1
@@ -97,7 +96,7 @@ with tab1:
                     st.success(f"Thank you! Successfully uploaded {success_count} of {total_files} memories.")
                 
                 if failed_files:
-                    st.warning(f"Failed to upload {len(failed_files)} file(s) due to connection limits. Try a smaller batch.")
+                    st.warning(f"Failed to upload {len(failed_files)} file(s). Try a smaller batch.")
                     for fname, err in failed_files:
                         st.text(f"- {fname}: {err}")
 
@@ -107,13 +106,13 @@ with tab2:
     
     if drive_service:
         try:
-            # Query files specifically inside your designated folder
+            # Limited page size (12 items) to prevent connection timeouts/broken pipes
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
             
             results = drive_service.files().list(
                 q=query,
-                pageSize=50,
-                fields="files(id, name, webViewLink, thumbnailLink, mimeType)",
+                pageSize=12,
+                fields="files(id, name, webViewLink, mimeType)",
                 orderBy="createdTime desc"
             ).execute()
             files = results.get('files', [])
@@ -125,16 +124,17 @@ with tab2:
                 for idx, file in enumerate(files):
                     col = cols[idx % 2]
                     with col:
-                        st.write(f"**{file.get('name', 'Memory')}**")
+                        file_name = file.get('name', 'Memory')
                         mime_type = file.get('mimeType', '')
+                        
+                        st.write(f"**{file_name}**")
                         if 'image' in mime_type:
-                            thumb_link = file.get('thumbnailLink')
-                            if thumb_link:
-                                st.image(thumb_link.replace('=s220', '=s600'), use_container_width=True)
+                            st.info("📷 Photo File")
                         elif 'video' in mime_type:
                             st.info("🎥 Video File")
                         
-                        st.markdown(f"[View / Download]({file.get('webViewLink')})", unsafe_allow_html=True)
+                        # Direct secure link prevents heavy streaming crashes
+                        st.markdown(f"[Open / Download Memory]({file.get('webViewLink')})", unsafe_allow_html=True)
                         st.divider()
         except Exception as e:
             st.error(f"Could not load gallery: {e}")

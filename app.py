@@ -20,89 +20,55 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
 
-# --- CUSTOM CSS FOR GOOGLE PHOTOS GRID & MOBILE OPTIMIZATION ---
+# --- CUSTOM CSS: FORCE 3 COLUMNS ON MOBILE & GOOGLE PHOTOS STYLE ---
 st.markdown("""
 <style>
-    /* Clean Google Photos Style Uniform Grid */
-    .gallery-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-        gap: 8px;
-        margin-bottom: 20px;
+    /* Force Streamlit columns to stay 3-across even on mobile screens */
+    [data-testid="column"] {
+        width: 33.333% !important;
+        flex: 1 1 33.333% !important;
+        min-width: 33.333% !important;
+        padding: 3px !important;
     }
     .photo-card {
         position: relative;
-        background-color: #f0f0f0;
-        border-radius: 8px;
+        background-color: #111;
+        border-radius: 6px;
         overflow: hidden;
         aspect-ratio: 1 / 1;
-        cursor: pointer;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        user-select: none;
+        margin-bottom: 5px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.15);
     }
-    .photo-card img, .photo-card video {
+    .photo-card img {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        border-radius: 8px;
+        border-radius: 6px;
     }
-    .video-overlay {
+    .video-badge {
         display: flex;
         align-items: center;
         justify-content: center;
         width: 100%;
         height: 100%;
-        background: #111;
+        background: #222;
         color: white;
-        font-size: 24px;
-        border-radius: 8px;
+        font-size: 20px;
+        border-radius: 6px;
     }
-    /* Selection Overlay Checkmark */
-    .select-checkbox {
-        position: absolute;
-        top: 6px;
-        left: 6px;
-        width: 24px;
-        height: 24px;
-        border-radius: 50%;
-        border: 2px solid white;
-        background: rgba(0,0,0,0.3);
+    .card-actions {
         display: flex;
+        justify-content: space-between;
         align-items: center;
-        justify-content: center;
-        color: white;
-        font-size: 12px;
-        font-weight: bold;
-        z-index: 5;
-    }
-    .photo-card.selected .select-checkbox {
-        background: #0275d8;
-        border-color: #0275d8;
-    }
-    /* Thumbnail Delete Button */
-    .delete-btn {
-        position: absolute;
-        top: 6px;
-        right: 6px;
-        width: 24px;
-        height: 24px;
-        border-radius: 50%;
-        background: rgba(0,0,0,0.6);
-        color: white;
-        border: none;
-        font-size: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        z-index: 5;
+        font-size: 11px;
+        margin-bottom: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- PERSONAL TOUCH: TITLE ---
 st.title("💍 Jamie & Millie's Wedding Album")
-st.write("Welcome! Share your favorite moments from your phone's gallery and browse live memories below.")
+st.write("Welcome! Share your favorite moments and browse the live gallery below.")
 
 # --- GOOGLE API AUTHENTICATION ---
 @st.cache_resource
@@ -129,12 +95,11 @@ tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
 with tab1:
     st.header("Upload Photos & Videos")
-    st.write("Tap below to open your phone's photo library, camera, or video records:")
+    st.write("Tap below to open your phone's photo library, camera, or files:")
     
-    # Native mobile file picker configuration prompting camera/gallery sources
     uploaded_files = st.file_uploader(
         "Choose files from gallery", 
-        type=None,  # Accepts all media types to trigger native mobile media selection prompt
+        type=None,
         accept_multiple_files=True,
         label_visibility="collapsed"
     )
@@ -203,93 +168,87 @@ with tab2:
                     if attempt == 2:
                         raise net_err
             
-            files = results.get('files', []) if results else []
+            files = results.get('files', []) if files else []
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                st.write("✨ **Tip:** Tap items to select them, then use the download button at the top. Click a thumbnail to view full screen.")
-                
-                # Container for interactive gallery state management
-                selected_ids = st.session_state.get('selected_gallery_ids', [])
+                selected_files = []
 
-                # Top Action Bar when items are selected
-                if selected_ids:
-                    col_act1, col_act2 = st.columns([0.7, 0.3])
-                    with col_act1:
-                        st.info(f"**{len(selected_ids)} items selected**")
-                    with col_act2:
+                # --- TOP BATCH DOWNLOAD ACTION BAR ---
+                # Check session state for all file selections
+                active_selected_links = []
+                for file in files:
+                    fid = file['id']
+                    if st.session_state.get(f"sel_{fid}", False):
+                        if file.get('webContentLink'):
+                            active_selected_links.append(file['webContentLink'])
+
+                if active_selected_links:
+                    st.markdown("---")
+                    col_b1, col_b2 = st.columns([0.6, 0.4])
+                    with col_b1:
+                        st.write(f"**{len(active_selected_links)} items selected**")
+                    with col_b2:
                         if st.button("📥 Download Selected"):
-                            # Build sequential JavaScript download triggers for the user's browser downloads folder
-                            js_downloads = ""
-                            for fid in selected_ids:
-                                matched_file = next((f for f in files if f['id'] == fid), None)
-                                if matched_file and matched_file.get('webContentLink'):
-                                    dl_link = matched_file['webContentLink']
-                                    js_downloads += f"setTimeout(function(){{ window.open('{dl_link}', '_blank'); }}, 300 * {selected_ids.index(fid)});"
-                            
-                            if js_downloads:
-                                st.components.v1.html(f"<script>{js_downloads}</script>", height=0)
-                                st.success("Downloading selected files to your device folder...")
-
-                    if st.button("Clear Selection"):
-                        st.session_state['selected_gallery_ids'] = []
-                        st.rerun()
+                            # Sequential JavaScript trigger to drop files straight into downloads folder
+                            js_code = ""
+                            for i, link in enumerate(active_selected_links):
+                                js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
+                            st.components.v1.html(f"<script>{js_code}</script>", height=0)
+                            st.success("Downloading selected items to your device folder...")
                     st.markdown("---")
 
-                # Render Google Photos style uniform grid using columns
+                # --- 3-COLUMN UNIFORM GRID ---
                 grid_cols = st.columns(3)
                 for idx, file in enumerate(files):
                     g_col = grid_cols[idx % 3]
                     with g_col:
                         try:
                             file_id = file.get('id')
-                            file_name = file.get('name', 'Memory')
                             mime_type = file.get('mimeType', '')
                             thumb_link = file.get('thumbnailLink')
                             web_link = file.get('webViewLink', '#')
                             is_mine = file_id in st.session_state.my_uploads
-                            is_selected = file_id in selected_ids
                             
-                            # Thumbnail Media Preview HTML
+                            # Thumbnail Media View (Clicking image opens full view in new tab without downloading)
                             if 'image' in mime_type and thumb_link:
                                 img_src = thumb_link.replace('=s220', '=s600')
-                                media_html = f'<img src="{img_src}" alt="Memory">'
+                                thumbnail_html = f'''
+                                <div class="photo-card">
+                                    <a href="{web_link}" target="_blank">
+                                        <img src="{img_src}" alt="Memory">
+                                    </a>
+                                </div>
+                                '''
                             else:
-                                media_html = '<div class="video-overlay">▶</div>'
+                                thumbnail_html = f'''
+                                <div class="photo-card">
+                                    <a href="{web_link}" target="_blank" style="text-decoration:none;">
+                                        <div class="video-badge">▶</div>
+                                    </a>
+                                </div>
+                                '''
                             
-                            # Card HTML container
-                            card_class = "photo-card selected" if is_selected else "photo-card"
+                            st.markdown(thumbnail_html, unsafe_allow_html=True)
                             
-                            # Render interactive thumbnail card
-                            st.markdown(f'''
-                            <div class="{card_class}" id="card_{file_id}" onclick="
-                                event.preventDefault();
-                                window.location.href = '?select_id={file_id}';
-                            ">
-                                <a href="{web_link}" target="_blank" title="Click to view full size" style="position: absolute; width:100%; height:100%; top:0; left:0; z-index:1;"></a>
-                                {media_html}
-                                <div class="select-checkbox">{"✓" if is_selected else ""}</div>
-                            </div>
-                            ''', unsafe_allow_html=True)
-                            
-                            # Handle selection toggle via query parameters or buttons safely in Streamlit state
-                            # (A secondary delete button if it belongs to the user session)
-                            if is_mine:
-                                if st.button("❌ Remove", key=f"del_{file_id}", help="Delete your upload"):
-                                    for del_attempt in range(3):
-                                        try:
-                                            drive_service.files().delete(fileId=file_id).execute()
-                                            break
-                                        except Exception:
-                                            if del_attempt == 2:
-                                                raise
-                                    if file_id in st.session_state.my_uploads:
-                                        st.session_state.my_uploads.remove(file_id)
-                                    if file_id in selected_ids:
-                                        selected_ids.remove(file_id)
-                                        st.session_state['selected_gallery_ids'] = selected_ids
-                                    st.rerun()
+                            # Compact selection checkbox and optional delete button right under thumbnail
+                            act_c1, act_c2 = st.columns([0.7, 0.3])
+                            with act_c1:
+                                st.checkbox("Select", key=f"sel_{file_id}", label_visibility="collapsed")
+                            with act_c2:
+                                if is_mine:
+                                    if st.button("❌", key=f"del_{file_id}", help="Delete your upload"):
+                                        for del_attempt in range(3):
+                                            try:
+                                                drive_service.files().delete(fileId=file_id).execute()
+                                                break
+                                            except Exception:
+                                                if del_attempt == 2:
+                                                    raise
+                                        if file_id in st.session_state.my_uploads:
+                                            st.session_state.my_uploads.remove(file_id)
+                                        st.rerun()
 
                         except Exception:
                             pass

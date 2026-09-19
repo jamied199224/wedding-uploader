@@ -65,52 +65,64 @@ def get_google_services():
         return None, None
 
 def get_or_create_likes_spreadsheet(drive_service, sheets_service, folder_id):
-    """Find or create the Google Sheet used to store like counts."""
+    """Find or create the Google Sheet used to store like counts with network retries."""
     query = f"'{folder_id}' in parents and name='wedding_likes_db' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
-    res = drive_service.files().list(q=query, fields="files(id)").execute()
-    files = res.get('files', [])
     
-    if files:
-        return files[0]['id']
-        
-    spreadsheet_body = {
-        'properties': {'title': 'wedding_likes_db'}
-    }
-    sheet = sheets_service.spreadsheets().create(body=spreadsheet_body, fields='spreadsheetId').execute()
-    sheet_id = sheet.get('spreadsheetId')
-    
-    file_obj = drive_service.files().get(fileId=sheet_id, fields='parents').execute()
-    previous_parents = ",".join(file_obj.get('parents', []))
-    drive_service.files().update(
-        fileId=sheet_id,
-        addParents=folder_id,
-        removeParents=previous_parents,
-        fields='id, parents'
-    ).execute()
-    
-    return sheet_id
+    for attempt in range(3):
+        try:
+            res = drive_service.files().list(q=query, fields="files(id)").execute()
+            files = res.get('files', [])
+            
+            if files:
+                return files[0]['id']
+                
+            spreadsheet_body = {
+                'properties': {'title': 'wedding_likes_db'}
+            }
+            sheet = sheets_service.spreadsheets().create(body=spreadsheet_body, fields='spreadsheetId').execute()
+            sheet_id = sheet.get('spreadsheetId')
+            
+            file_obj = drive_service.files().get(fileId=sheet_id, fields='parents').execute()
+            previous_parents = ",".join(file_obj.get('parents', []))
+            drive_service.files().update(
+                fileId=sheet_id,
+                addParents=folder_id,
+                removeParents=previous_parents,
+                fields='id, parents'
+            ).execute()
+            
+            return sheet_id
+        except Exception as e:
+            if attempt == 2:
+                st.error(f"Failed to connect to Google Drive after multiple attempts: {e}")
+                return None
+            time.sleep(2)
+    return None
 
 def load_likes_from_sheet(sheets_service, spreadsheet_id):
-    """Load all file IDs and their like counts from the Google Sheet."""
-    try:
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range="A:B"
-        ).execute()
-        rows = result.get('values', [])
-        likes_dict = {}
-        for row in rows:
-            if len(row) >= 1:
-                fid = row[0]
-                count_str = row[1] if len(row) > 1 else "0"
-                try:
-                    likes_dict[fid] = int(count_str)
-                except ValueError:
-                    likes_dict[fid] = 0
-        return likes_dict
-    except Exception as e:
-        st.error(f"Error loading likes from sheet: {e}")
-        return {}
+    """Load all file IDs and their like counts from the Google Sheet with retries."""
+    for attempt in range(3):
+        try:
+            result = sheets_service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range="A:B"
+            ).execute()
+            rows = result.get('values', [])
+            likes_dict = {}
+            for row in rows:
+                if len(row) >= 1:
+                    fid = row[0]
+                    count_str = row[1] if len(row) > 1 else "0"
+                    try:
+                        likes_dict[fid] = int(count_str)
+                    except ValueError:
+                        likes_dict[fid] = 0
+            return likes_dict
+        except Exception as e:
+            if attempt == 2:
+                return {}
+            time.sleep(1.5)
+    return {}
 
 def update_like_in_sheet(sheets_service, spreadsheet_id, file_id, delta):
     """Atomically update a specific file's like count in the Google Sheet."""
@@ -157,7 +169,6 @@ def update_like_in_sheet(sheets_service, spreadsheet_id, file_id, delta):
             ).execute()
         return new_count
     except Exception as e:
-        st.error(f"Error updating sheet: {e}")
         return None
 
 def remove_file_from_sheet(sheets_service, spreadsheet_id, file_id):
@@ -221,7 +232,9 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
         raise Exception(f"Upload failed ({upload_res.status_code}): {upload_res.text}")
 
 drive_service, sheets_service = get_google_services()
-spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, TARGET_FOLDER_ID) if (drive_service and sheets_service) else None
+spreadsheet_id = None
+if drive_service and sheets_service:
+    spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, TARGET_FOLDER_ID)
 
 st.title("💍 Jamie & Millie's Wedding Album")
 st.write("Welcome! Share your favorite memories and browse the live gallery below.")
@@ -317,12 +330,11 @@ with tab2:
             ).execute()
             
             files = results.get('files', [])
-            likes_dict = load_likes_from_sheet(sheets_service, spreadsheet_id)
+            likes_dict = load_likes_from_sheet(sheets_service, spreadsheet_id) if spreadsheet_id else {}
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                # Native responsive grid using Streamlit columns (3 per row)
                 cols_per_row = 3
                 for i in range(0, len(files), cols_per_row):
                     row_files = files[i:i+cols_per_row]
@@ -349,7 +361,6 @@ with tab2:
                             else:
                                 st.info("📹 Video file")
                             
-                            # Native Action Buttons
                             btn_col1, btn_col2 = st.columns(2)
                             
                             liked_key = f"liked_{fid}"
@@ -370,7 +381,8 @@ with tab2:
                                 if st.button("🗑️ Delete", key=f"delete_{fid}"):
                                     try:
                                         drive_service.files().delete(fileId=fid).execute()
-                                        remove_file_from_sheet(sheets_service, spreadsheet_id, fid)
+                                        if spreadsheet_id:
+                                            remove_file_from_sheet(sheets_service, spreadsheet_id, fid)
                                         st.success("Memory deleted!")
                                         st.rerun()
                                     except Exception as e:
@@ -379,5 +391,4 @@ with tab2:
                             st.markdown("---")
 
         except Exception as e:
-        # End of file update
             st.error(f"Google Drive Error: {e}")

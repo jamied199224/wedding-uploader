@@ -41,7 +41,7 @@ if uploaded_files and st.button("Upload Memories"):
     with st.spinner("Connecting to Google Drive..."):
         gc, drive_service = init_connections()
         folder_id = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl" # Your Drive Folder ID
-        sheet = gc.open("1qCaENpLHD9APb-DZ9pgyalpp37xNrUeJt4lps5b1IUo").sheet1 
+        sheet = gc.open_by_key("1qCaENpLHD9APb-DZ9pgyalpp37xNrUeJt4lps5b1IUo").sheet1
 
     progress_bar = st.progress(0)
     status_text = st.empty()

@@ -369,68 +369,6 @@ with tab2:
                         color: #888;
                         cursor: not-allowed;
                     }}
-
-                    /* LIGHTBOX MODAL OVERLAY (TAP BACKDROP TO CLOSE) */
-                    .modal-overlay {{
-                        display: none;
-                        position: fixed;
-                        top: 0; left: 0;
-                        width: 100vw; height: 100vh;
-                        background: rgba(0, 0, 0, 0.85);
-                        z-index: 99999;
-                        justify-content: center;
-                        align-items: center;
-                    }}
-
-                    /* 90% SCREEN MODAL CONTAINER */
-                    .modal-content-wrapper {{
-                        position: relative;
-                        max-width: 90vw;
-                        max-height: 90vh;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                    }}
-
-                    .modal-img {{
-                        max-width: 90vw;
-                        max-height: 90vh;
-                        width: auto;
-                        height: auto;
-                        object-fit: contain;
-                        border-radius: 8px;
-                        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
-                    }}
-
-                    .modal-iframe {{
-                        width: 90vw;
-                        height: 75vh;
-                        max-width: 90vw;
-                        max-height: 90vh;
-                        border: none;
-                        border-radius: 8px;
-                        background: #000;
-                        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
-                    }}
-
-                    .close-modal-btn {{
-                        position: absolute;
-                        top: -14px;
-                        right: -14px;
-                        color: #fff;
-                        font-size: 18px;
-                        font-weight: bold;
-                        cursor: pointer;
-                        background: rgba(0, 0, 0, 0.85);
-                        border: 2px solid #fff;
-                        border-radius: 50%;
-                        width: 32px;
-                        height: 32px;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        z-index: 100000;
-                    }}
                 </style>
                 </head>
                 <body>
@@ -443,32 +381,39 @@ with tab2:
                         <button id="dl-btn" class="dl-btn" onclick="prepareZipDownload()" disabled>📦 Download ZIP</button>
                     </div>
 
-                    <!-- LIGHTBOX MODAL CONTAINER -->
-                    <div id="lightbox" class="modal-overlay" onclick="closeModal()">
-                        <div class="modal-content-wrapper" onclick="event.stopPropagation()">
-                            <div class="close-modal-btn" onclick="closeModal()">✕</div>
-                            <div id="modal-body"></div>
-                        </div>
-                    </div>
-
                     <script>
                         function openModal(fullImg, previewUrl, isVideo) {{
-                            const lightbox = document.getElementById('lightbox');
-                            const modalBody = document.getElementById('modal-body');
+                            const parentDoc = window.parent.document;
+                            let overlay = parentDoc.getElementById('global-wedding-lightbox');
                             
-                            if (isVideo) {{
-                                modalBody.innerHTML = '<iframe src="' + previewUrl + '" class="modal-iframe" allow="autoplay"></iframe>';
-                            }} else {{
-                                modalBody.innerHTML = '<img src="' + fullImg + '" class="modal-img" />';
+                            if (!overlay) {{
+                                overlay = parentDoc.createElement('div');
+                                overlay.id = 'global-wedding-lightbox';
+                                overlay.style.cssText = 'position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:999999; display:none; justify-content:center; align-items:center;';
+                                overlay.onclick = closeModal;
+                                parentDoc.body.appendChild(overlay);
                             }}
-                            lightbox.style.display = 'flex';
+
+                            const mediaHtml = isVideo ? 
+                                '<iframe src="' + previewUrl + '" style="width:90vw; height:75vh; max-width:90vw; max-height:90vh; border:none; border-radius:8px; background:#000; box-shadow:0 8px 30px rgba(0,0,0,0.6);" allow="autoplay"></iframe>' :
+                                '<img src="' + fullImg + '" style="max-width:90vw; max-height:90vh; width:auto; height:auto; object-fit:contain; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.6);" />';
+
+                            overlay.innerHTML = `
+                                <div style="position:relative; max-width:90vw; max-height:90vh; display:flex; justify-content:center; align-items:center;" onclick="event.stopPropagation()">
+                                    <div onclick="closeModal()" style="position:absolute; top:-14px; right:-14px; color:#fff; font-size:18px; font-weight:bold; cursor:pointer; background:rgba(0,0,0,0.85); border:2px solid #fff; border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; z-index:1000000;">✕</div>
+                                    ${{mediaHtml}}
+                                </div>
+                            `;
+                            overlay.style.display = 'flex';
                         }}
 
                         function closeModal() {{
-                            const lightbox = document.getElementById('lightbox');
-                            const modalBody = document.getElementById('modal-body');
-                            lightbox.style.display = 'none';
-                            modalBody.innerHTML = '';
+                            const parentDoc = window.parent.document;
+                            const overlay = parentDoc.getElementById('global-wedding-lightbox');
+                            if (overlay) {{
+                                overlay.style.display = 'none';
+                                overlay.innerHTML = '';
+                            }}
                         }}
 
                         function updateCount(e) {{

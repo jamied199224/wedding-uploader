@@ -415,37 +415,52 @@ with tab2:
 
                     <script>
                         function openModal(fullImg, previewUrl, isVideo) {{
-                            const parentDoc = window.parent.document;
+                            const parentWin = window.parent;
+                            const parentDoc = parentWin.document;
+                            
+                            // Define close function on parent window scope
+                            parentWin.closeWeddingModal = function() {{
+                                const overlay = parentDoc.getElementById('global-wedding-lightbox');
+                                if (overlay) {{
+                                    overlay.style.display = 'none';
+                                    overlay.innerHTML = '';
+                                }}
+                            }};
+
                             let overlay = parentDoc.getElementById('global-wedding-lightbox');
                             
                             if (!overlay) {{
                                 overlay = parentDoc.createElement('div');
                                 overlay.id = 'global-wedding-lightbox';
                                 overlay.style.cssText = 'position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:999999; display:none; justify-content:center; align-items:center;';
-                                overlay.onclick = closeModal;
                                 parentDoc.body.appendChild(overlay);
                             }}
 
+                            // Close when clicking empty dark backdrop area
+                            overlay.onclick = function(e) {{
+                                if (e.target === overlay) {{
+                                    parentWin.closeWeddingModal();
+                                }}
+                            }};
+
                             const mediaHtml = isVideo ? 
-                                '<iframe src="' + previewUrl + '" style="width:90vw; height:75vh; max-width:90vw; max-height:90vh; border:none; border-radius:8px; background:#000; box-shadow:0 8px 30px rgba(0,0,0,0.6);" allow="autoplay"></iframe>' :
-                                '<img src="' + fullImg + '" style="max-width:90vw; max-height:90vh; width:auto; height:auto; object-fit:contain; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.6);" />';
+                                '<iframe src="' + previewUrl + '" style="width:85vw; height:75vh; max-width:85vw; max-height:85vh; border:none; border-radius:8px; background:#000; box-shadow:0 8px 30px rgba(0,0,0,0.6);" allow="autoplay"></iframe>' :
+                                '<img src="' + fullImg + '" style="max-width:85vw; max-height:85vh; width:auto; height:auto; object-fit:contain; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.6);" />';
 
                             overlay.innerHTML = `
-                                <div style="position:relative; max-width:90vw; max-height:90vh; display:flex; justify-content:center; align-items:center;" onclick="event.stopPropagation()">
-                                    <div onclick="closeModal()" style="position:absolute; top:-14px; right:-14px; color:#fff; font-size:18px; font-weight:bold; cursor:pointer; background:rgba(0,0,0,0.85); border:2px solid #fff; border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; z-index:1000000;">✕</div>
+                                <button onclick="window.parent.closeWeddingModal()" style="position:fixed; top:20px; right:20px; color:#fff; font-size:24px; font-weight:bold; cursor:pointer; background:rgba(0,0,0,0.75); border:2px solid #fff; border-radius:50%; width:44px; height:44px; display:flex; align-items:center; justify-content:center; z-index:1000001; line-height:1;">✕</button>
+                                <div style="position:relative; max-width:90vw; max-height:90vh; display:flex; justify-content:center; align-items:center;">
                                     ${{mediaHtml}}
                                 </div>
                             `;
                             overlay.style.display = 'flex';
-                        }}
 
-                        function closeModal() {{
-                            const parentDoc = window.parent.document;
-                            const overlay = parentDoc.getElementById('global-wedding-lightbox');
-                            if (overlay) {{
-                                overlay.style.display = 'none';
-                                overlay.innerHTML = '';
-                            }}
+                            // ESC key handler
+                            parentWin.onkeydown = function(e) {{
+                                if (e.key === 'Escape') {{
+                                    parentWin.closeWeddingModal();
+                                }}
+                            }};
                         }}
 
                         function updateCount(e) {{

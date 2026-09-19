@@ -233,6 +233,9 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
 drive_service, sheets_service = get_google_services()
 spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, TARGET_FOLDER_ID) if (drive_service and sheets_service) else None
 
+if drive_service and sheets_service and not spreadsheet_id:
+    st.warning("⚠️ Warning: Could not locate or create 'wedding_likes_db' Google Sheet in the target folder. Likes may not persist.")
+
 # --- HANDLE QUERY PARAMS (Delete, Like, & ZIP actions) ---
 params = st.query_params
 del_id = params.get("delete_id")
@@ -730,7 +733,11 @@ with tab2:
                             }}
 
                             setTimeout(() => {{
-                                window.parent.location.search = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
+                                try {{
+                                    window.top.location.href = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
+                                }} catch(err) {{
+                                    window.location.href = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
+                                }}
                             }}, 300);
                         }}
 
@@ -752,7 +759,7 @@ with tab2:
                         }}
 
                         function openModal(fullImg, previewUrl, isVideo) {{
-                            const parentWin = window.parent;
+                            const parentWin = window.top || window.parent;
                             const parentDoc = parentWin.document;
                             
                             parentWin.closeWeddingModal = function() {{
@@ -833,7 +840,11 @@ with tab2:
                                 ids.push(cb.getAttribute('data-id'));
                             }});
                             if (ids.length > 0) {{
-                                window.parent.location.search = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
+                                try {{
+                                    window.top.location.href = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
+                                }} catch(err) {{
+                                    window.location.href = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
+                                }}
                             }}
                         }}
 
@@ -845,7 +856,11 @@ with tab2:
                                 try {{
                                     window.localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
                                 }} catch(e) {{}}
-                                window.parent.location.search = '?delete_id=' + fid + '&_t=' + Date.now();
+                                try {{
+                                    window.top.location.href = '?delete_id=' + fid + '&_t=' + Date.now();
+                                }} catch(err) {{
+                                    window.location.href = '?delete_id=' + fid + '&_t=' + Date.now();
+                                }}
                             }}
                         }}
                     </script>

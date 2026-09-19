@@ -1,9 +1,8 @@
 import streamlit as st
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseUpload
 import io
-from PIL import Image
 
 # Page configuration
 st.set_page_config(
@@ -42,23 +41,6 @@ def get_google_services():
         return None, None
 
 drive_service, sheets_service = get_google_services()
-
-# --- CACHED THUMBNAIL LOADER ---
-@st.cache_data(show_spinner=False)
-def load_thumbnail(file_id):
-    try:
-        request = drive_service.files().get_media(fileId=file_id)
-        fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        fh.seek(0)
-        img = Image.open(fh)
-        img.thumbnail((300, 300))
-        return img
-    except Exception:
-        return None
 
 # --- TAB LAYOUT ---
 tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Interactive Gallery"])
@@ -123,7 +105,7 @@ with tab2:
             results = drive_service.files().list(
                 q=query,
                 pageSize=30,
-                fields="files(id, name, webViewLink, mimeType)",
+                fields="files(id, name, webViewLink, thumbnailLink, mimeType)",
                 orderBy="createdTime desc"
             ).execute()
             files = results.get('files', [])
@@ -140,6 +122,7 @@ with tab2:
                     file_id = file['id']
                     file_name = file.get('name', 'Memory')
                     mime_type = file.get('mimeType', '')
+                    thumb_link = file.get('thumbnailLink')
                     is_mine = file_id in st.session_state.my_uploads
                     
                     with col:
@@ -158,13 +141,12 @@ with tab2:
                                     except Exception as e:
                                         st.error(f"Error: {e}")
                         
-                        # Thumbnail or video badge display
-                        if 'image' in mime_type:
-                            thumb = load_thumbnail(file_id)
-                            if thumb:
-                                st.image(thumb, use_container_width=True)
-                            else:
-                                st.info("📷 Image File")
+                        # Fast native Google Drive thumbnail or video placeholder
+                        if 'image' in mime_type and thumb_link:
+                            # Scales up Drive's default thumbnail size for crisp display
+                            st.image(thumb_link.replace('=s220', '=s400'), use_container_width=True)
+                        elif 'image' in mime_type:
+                            st.info("📷 Image File")
                         else:
                             st.info("🎥 Video File")
                         

@@ -144,16 +144,17 @@ def update_like_in_sheet(sheets_service, spreadsheet_id, file_id, delta):
             
         sheets_service.spreadsheets().values().clear(
             spreadsheetId=spreadsheet_id,
-            range="A:B"
+            range="A:Z"
         ).execute()
         
-        body = {'values': updated_rows}
-        sheets_service.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id,
-            range="A1",
-            valueInputOption="RAW",
-            body=body
-        ).execute()
+        if updated_rows:
+            body = {'values': updated_rows}
+            sheets_service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range="A1",
+                valueInputOption="RAW",
+                body=body
+            ).execute()
         return new_count
     except Exception as e:
         st.error(f"Error updating sheet: {e}")
@@ -210,7 +211,7 @@ if del_id and drive_service:
             result = sheets_service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range="A:B").execute()
             rows = result.get('values', [])
             new_rows = [r for r in rows if len(r) > 0 and r[0] != del_id]
-            sheets_service.spreadsheets().values().clear(spreadsheetId=spreadsheet_id, range="A:B").execute()
+            sheets_service.spreadsheets().values().clear(spreadsheetId=spreadsheet_id, range="A:Z").execute()
             if new_rows:
                 sheets_service.spreadsheets().values().update(
                     spreadsheetId=spreadsheet_id, range="A1", valueInputOption="RAW", body={'values': new_rows}
@@ -222,22 +223,24 @@ if del_id and drive_service:
     st.rerun()
 
 if like_id and sheets_service and spreadsheet_id:
+    action = params.get("action", "like")
+    delta = 1 if action == "like" else -1
     try:
-        update_like_in_sheet(sheets_service, spreadsheet_id, like_id, 1)
+        update_like_in_sheet(sheets_service, spreadsheet_id, like_id, delta)
     except Exception as e:
         st.error(f"Like update failed: {e}")
     st.query_params.clear()
     st.rerun()
 
 st.title("💍 Jamie & Millie's Wedding Album")
-st.write("Welcome! Share your favorite moments and browse live memories below.")
-st.caption("✨ Tap to open, Tap heart to send likes")
+st.write("Welcome! Share your favorite memories and browse the live gallery below.")
+st.caption("✨ Tap photo to open | Tap heart to like | Double tap photo to like")
 
 tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
 with tab1:
     st.header("Upload Photos & Videos")
-    st.write("Tap below to choose files from your phone library or camera:")
+    st.write("Choose files from your phone library or camera:")
     
     if "upload_msg" in st.session_state:
         st.success(st.session_state.upload_msg)
@@ -309,7 +312,6 @@ with tab1:
                         st.write(f"- **{fname}**: {err}")
                 
                 if success_count > 0:
-                    # Pass newly uploaded IDs to frontend via st.session_state / JS injection
                     st.session_state.new_uploads = newly_uploaded_ids
                     st.session_state.upload_msg = f"Successfully uploaded {success_count} of {total_files} memories!"
                     st.session_state.uploader_key += 1
@@ -392,7 +394,6 @@ with tab2:
             files = results.get('files', []) if results else []
             likes_dict = load_likes_from_sheet(sheets_service, spreadsheet_id)
 
-            # Check if there are newly uploaded files to register in localStorage
             recent_uploads_json = "[]"
             if "new_uploads" in st.session_state:
                 recent_uploads_json = json.dumps(st.session_state.new_uploads)
@@ -428,11 +429,11 @@ with tab2:
                     html_items.append(f'''
                     <div class="grid-card" id="card-{fid}" data-fid="{fid}">
                         <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount(event)" />
-                        <button class="like-btn" id="like-btn-{fid}" title="Send a like" onclick="addLike(event, \'{fid}\')">
+                        <button class="like-btn" id="like-btn-{fid}" title="Like memory" onclick="toggleLike(event, \'{fid}\')">
                             ❤️ <span id="like-count-{fid}">{likes_count}</span>
                         </button>
                         <button class="delete-btn" id="del-btn-{fid}" title="Delete Photo" onclick="deleteItem(event, \'{fid}\')" style="display:none;">✕</button>
-                        <div class="card-link" onclick="openModal(\'{full_image}\', \'{preview_url}\', {'true' if is_video else 'false'})">
+                        <div class="card-link" onclick="handleCardClick(event, \'{fid}\', \'{full_image}\', \'{preview_url}\', {'true' if is_video else 'false'})">
                             {media_content}
                         </div>
                         <div class="uploader-tag">Added by {uploader_name}</div>
@@ -536,9 +537,11 @@ with tab2:
                         font-family: inherit;
                         transition: transform 0.15s ease, background 0.15s ease;
                     }}
-                    .like-btn:active {{
-                        transform: translateX(-50%) scale(1.15);
+                    
+                    .like-btn.liked {{
                         background: rgba(225, 29, 72, 0.9);
+                        border-color: #ff4d6d;
+                        transform: translateX(-50%) scale(1.1);
                     }}
 
                     @keyframes heartBurst {{
@@ -613,7 +616,9 @@ with tab2:
                     </div>
 
                     <script>
-                        // Persist user's uploaded items in localStorage so refresh doesn't remove delete button
+                        let clickTimers = {{}};
+                        let tapCounts = {{}};
+
                         function getMyUploads() {{
                             try {{
                                 return JSON.parse(localStorage.getItem('my_wedding_uploads') || '[]');
@@ -622,7 +627,22 @@ with tab2:
                             }}
                         }}
 
-                        function initUploads() {{
+                        function getLikedItems() {{
+                            try {{
+                                return JSON.parse(localStorage.getItem('liked_wedding_photos') || '[]');
+                            }} catch(e) {{
+                                return [];
+                            }}
+                        }}
+
+                        function setLikedItems(items) {{
+                            try {{
+                                localStorage.setItem('liked_wedding_photos', JSON.stringify(items));
+                            }} catch(e) {{}}
+                        }}
+
+                        function initApp() {{
+                            // 1. Handle uploads & delete buttons persistence
                             let mine = getMyUploads();
                             const newlyUploaded = {recent_uploads_json};
                             if (newlyUploaded && newlyUploaded.length > 0) {{
@@ -632,40 +652,82 @@ with tab2:
                                 localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
                             }}
 
-                            // Show delete buttons for items owned by this browser
                             mine.forEach(fid => {{
                                 const delBtn = document.getElementById('del-btn-' + fid);
                                 if (delBtn) delBtn.style.display = 'flex';
                             }});
+
+                            // 2. Sync liked hearts state from localStorage
+                            const liked = getLikedItems();
+                            liked.forEach(fid => {{
+                                const btn = document.getElementById('like-btn-' + fid);
+                                if (btn) btn.classList.add('liked');
+                            }});
                         }}
 
-                        if (document.readyState === 'loading') {{
-                            document.addEventListener('DOMContentLoaded', initUploads);
-                        }} else {{
-                            initUploads();
-                        }}
+                        // Run immediately on script load (bypassing broken iframe DOMContentLoaded)
+                        initApp();
 
-                        function addLike(e, fid) {{
+                        function toggleLike(e, fid) {{
                             if (e) e.stopPropagation();
 
                             const card = document.getElementById('card-' + fid);
                             const countSpan = document.getElementById('like-count-' + fid);
+                            const likeBtn = document.getElementById('like-btn-' + fid);
 
-                            if (card) {{
-                                const burst = document.createElement('div');
-                                burst.className = 'pop-heart';
-                                burst.innerText = '❤️';
-                                card.appendChild(burst);
-                                setTimeout(() => burst.remove(), 650);
-                            }}
-                            if (countSpan) {{
-                                const cur = parseInt(countSpan.innerText || '0');
-                                countSpan.innerText = cur + 1;
+                            let likedList = getLikedItems();
+                            const alreadyLiked = likedList.includes(fid);
+                            let action = "like";
+
+                            if (!alreadyLiked) {{
+                                likedList.push(fid);
+                                setLikedItems(likedList);
+                                action = "like";
+
+                                if (card) {{
+                                    const burst = document.createElement('div');
+                                    burst.className = 'pop-heart';
+                                    burst.innerText = '❤️';
+                                    card.appendChild(burst);
+                                    setTimeout(() => burst.remove(), 650);
+                                }}
+                                if (likeBtn) likeBtn.classList.add('liked');
+                                if (countSpan) {{
+                                    const cur = parseInt(countSpan.innerText || '0');
+                                    countSpan.innerText = cur + 1;
+                                }}
+                            }} else {{
+                                likedList = likedList.filter(id => id !== fid);
+                                setLikedItems(likedList);
+                                action = "unlike";
+
+                                if (likeBtn) likeBtn.classList.remove('liked');
+                                if (countSpan) {{
+                                    const cur = parseInt(countSpan.innerText || '0');
+                                    countSpan.innerText = Math.max(0, cur - 1);
+                                }}
                             }}
 
                             setTimeout(() => {{
-                                window.parent.location.search = '?like_id=' + fid + '&_t=' + Date.now();
+                                window.parent.location.search = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
                             }}, 300);
+                        }}
+
+                        function handleCardClick(e, fid, fullImg, previewUrl, isVideo) {{
+                            if (e) e.stopPropagation();
+                            
+                            tapCounts[fid] = (tapCounts[fid] || 0) + 1;
+
+                            if (tapCounts[fid] === 1) {{
+                                clickTimers[fid] = setTimeout(() => {{
+                                    tapCounts[fid] = 0;
+                                    openModal(fullImg, previewUrl, isVideo);
+                                }}, 260);
+                            }} else if (tapCounts[fid] === 2) {{
+                                clearTimeout(clickTimers[fid]);
+                                tapCounts[fid] = 0;
+                                toggleLike(null, fid);
+                            }}
                         }}
 
                         function openModal(fullImg, previewUrl, isVideo) {{

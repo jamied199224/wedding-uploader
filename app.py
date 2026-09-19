@@ -21,32 +21,32 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
 
-# --- CUSTOM CSS: FORCE STRICTLY 3 COLUMNS ACROSS ALL MOBILE SCREENS ---
+# --- CUSTOM CSS: COMPACT 3-COLUMN GOOGLE PHOTOS GRID ---
 st.markdown("""
 <style>
     [data-testid="stHorizontalBlock"] {
         flex-wrap: nowrap !important;
+        gap: 4px !important;
     }
     [data-testid="column"] {
         width: 33.333% !important;
         flex: 1 1 33.333% !important;
         min-width: 0 !important;
-        padding: 2px !important;
+        padding: 1px !important;
     }
     .photo-card {
         position: relative;
         background-color: #111;
-        border-radius: 4px;
+        border-radius: 3px;
         overflow: hidden;
         aspect-ratio: 1 / 1;
-        margin-bottom: 2px;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        margin-bottom: 1px;
     }
     .photo-card img {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        border-radius: 4px;
+        border-radius: 3px;
     }
     .video-badge {
         display: flex;
@@ -56,8 +56,14 @@ st.markdown("""
         height: 100%;
         background: #222;
         color: white;
-        font-size: 16px;
-        border-radius: 4px;
+        font-size: 14px;
+        border-radius: 3px;
+    }
+    /* Reduce spacing for checkboxes and buttons to keep grid tight */
+    .stCheckbox {
+        font-size: 11px !important;
+        margin-top: -4px !important;
+        margin-bottom: 4px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -116,7 +122,6 @@ with tab1:
                 for index, uploaded_file in enumerate(uploaded_files):
                     status_text.text(f"Uploading {index + 1} of {total_files}: {uploaded_file.name}...")
                     
-                    # Retry loop for uploads
                     uploaded_successfully = False
                     last_err = None
                     
@@ -148,7 +153,7 @@ with tab1:
                             break
                         except (ssl.SSLError, socket.timeout, Exception) as e:
                             last_err = e
-                            time.sleep(1) # Wait a second before retrying
+                            time.sleep(1)
                     
                     if not uploaded_successfully:
                         failed_files.append((uploaded_file.name, str(last_err)))
@@ -172,7 +177,6 @@ with tab2:
         try:
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
             
-            # Robust retry wrapper for listing files
             results = None
             for attempt in range(3):
                 try:
@@ -216,7 +220,7 @@ with tab2:
                             st.success("Downloading straight to your device folder...")
                     st.markdown("---")
 
-                # --- TRUE CHUNKED 3-COLUMN GRID ---
+                # --- COMPACT 3-COLUMN CHUNKED GRID ---
                 for i in range(0, len(files), 3):
                     row_files = files[i:i+3]
                     cols = st.columns(3)
@@ -231,7 +235,7 @@ with tab2:
                                 is_mine = file_id in st.session_state.my_uploads
                                 
                                 if 'image' in mime_type and thumb_link:
-                                    img_src = thumb_link.replace('=s220', '=s600')
+                                    img_src = thumb_link.replace('=s220', '=s400') # Smaller thumbnail size for speed and compact look
                                     thumbnail_html = f'''
                                     <div class="photo-card">
                                         <a href="{web_link}" target="_blank">

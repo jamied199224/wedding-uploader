@@ -418,7 +418,6 @@ with tab2:
                             const parentWin = window.parent;
                             const parentDoc = parentWin.document;
                             
-                            // Define close function on parent window scope
                             parentWin.closeWeddingModal = function() {{
                                 const overlay = parentDoc.getElementById('global-wedding-lightbox');
                                 if (overlay) {{
@@ -432,30 +431,50 @@ with tab2:
                             if (!overlay) {{
                                 overlay = parentDoc.createElement('div');
                                 overlay.id = 'global-wedding-lightbox';
-                                overlay.style.cssText = 'position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:999999; display:none; justify-content:center; align-items:center;';
+                                overlay.style.cssText = 'position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.88); z-index:9999999; display:none; justify-content:center; align-items:center;';
                                 parentDoc.body.appendChild(overlay);
                             }}
 
-                            // Close when clicking empty dark backdrop area
+                            // Close on backdrop click
                             overlay.onclick = function(e) {{
                                 if (e.target === overlay) {{
                                     parentWin.closeWeddingModal();
                                 }}
                             }};
 
-                            const mediaHtml = isVideo ? 
-                                '<iframe src="' + previewUrl + '" style="width:85vw; height:75vh; max-width:85vw; max-height:85vh; border:none; border-radius:8px; background:#000; box-shadow:0 8px 30px rgba(0,0,0,0.6);" allow="autoplay"></iframe>' :
-                                '<img src="' + fullImg + '" style="max-width:85vw; max-height:85vh; width:auto; height:auto; object-fit:contain; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.6);" />';
+                            overlay.innerHTML = '';
 
-                            overlay.innerHTML = `
-                                <button onclick="window.parent.closeWeddingModal()" style="position:fixed; top:20px; right:20px; color:#fff; font-size:24px; font-weight:bold; cursor:pointer; background:rgba(0,0,0,0.75); border:2px solid #fff; border-radius:50%; width:44px; height:44px; display:flex; align-items:center; justify-content:center; z-index:1000001; line-height:1;">✕</button>
-                                <div style="position:relative; max-width:90vw; max-height:90vh; display:flex; justify-content:center; align-items:center;">
-                                    ${{mediaHtml}}
-                                </div>
-                            `;
+                            // Create distinct Close Button element directly in parent window
+                            const closeBtn = parentDoc.createElement('button');
+                            closeBtn.id = 'wedding-modal-close-btn';
+                            closeBtn.innerHTML = '✕';
+                            closeBtn.style.cssText = 'position:fixed; top:20px; right:20px; color:#ffffff; font-size:26px; font-weight:bold; cursor:pointer; background:rgba(20,20,20,0.85); border:2px solid #ffffff; border-radius:50%; width:46px; height:46px; display:flex; align-items:center; justify-content:center; z-index:10000000; box-shadow:0 4px 12px rgba(0,0,0,0.6); line-height:1; font-family:sans-serif;';
+                            
+                            closeBtn.onclick = function(e) {{
+                                e.stopPropagation();
+                                parentWin.closeWeddingModal();
+                            }};
+
+                            const mediaContainer = parentDoc.createElement('div');
+                            mediaContainer.style.cssText = 'position:relative; max-width:85vw; max-height:85vh; display:flex; justify-content:center; align-items:center;';
+
+                            if (isVideo) {{
+                                const iframe = parentDoc.createElement('iframe');
+                                iframe.src = previewUrl;
+                                iframe.style.cssText = 'width:80vw; height:75vh; max-width:80vw; max-height:80vh; border:none; border-radius:8px; background:#000; box-shadow:0 8px 30px rgba(0,0,0,0.6);';
+                                iframe.allow = 'autoplay';
+                                mediaContainer.appendChild(iframe);
+                            }} else {{
+                                const img = parentDoc.createElement('img');
+                                img.src = fullImg;
+                                img.style.cssText = 'max-width:80vw; max-height:80vh; width:auto; height:auto; object-fit:contain; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.6);';
+                                mediaContainer.appendChild(img);
+                            }}
+
+                            overlay.appendChild(closeBtn);
+                            overlay.appendChild(mediaContainer);
                             overlay.style.display = 'flex';
 
-                            // ESC key handler
                             parentWin.onkeydown = function(e) {{
                                 if (e.key === 'Escape') {{
                                     parentWin.closeWeddingModal();

@@ -23,7 +23,6 @@ if 'my_uploads' not in st.session_state:
 # --- CUSTOM CSS: FORCE EXACTLY 3 COLUMNS ON PHONES & GOOGLE PHOTOS STYLE ---
 st.markdown("""
 <style>
-    /* Force Streamlit columns to stay strictly 3-across on mobile screens */
     [data-testid="column"] {
         width: 33.333% !important;
         flex: 1 1 33.333% !important;
@@ -55,13 +54,6 @@ st.markdown("""
         color: white;
         font-size: 18px;
         border-radius: 4px;
-    }
-    .card-footer {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 10px;
-        padding: 0 2px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -95,9 +87,8 @@ tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
 with tab1:
     st.header("Upload Photos & Videos")
-    st.write("Tap below to open your phone's photo library, camera, or video records:")
+    st.write("Tap below to choose files from your phone library or camera:")
     
-    # Explicit mobile media types trigger native iOS/Android camera & gallery selection popups
     uploaded_files = st.file_uploader(
         "Choose files from gallery", 
         type=["jpg", "jpeg", "png", "heic", "mp4", "mov"],
@@ -116,6 +107,8 @@ with tab1:
                 status_text = st.empty()
                 
                 success_count = 0
+                failed_files = []
+                
                 for index, uploaded_file in enumerate(uploaded_files):
                     status_text.text(f"Uploading {index + 1} of {total_files}: {uploaded_file.name}...")
                     try:
@@ -123,11 +116,13 @@ with tab1:
                             'name': f"{guest_name or 'Guest'}_{uploaded_file.name}",
                             'parents': [TARGET_FOLDER_ID]
                         }
+                        
                         media = MediaIoBaseUpload(
                             io.BytesIO(uploaded_file.getvalue()),
                             mimetype=uploaded_file.type or 'application/octet-stream',
                             resumable=True
                         )
+                        
                         file = drive_service.files().create(
                             body=file_metadata,
                             media_body=media,
@@ -135,18 +130,24 @@ with tab1:
                         ).execute()
                         
                         file_id = file.get('id')
-                        if file_id not in st.session_state.my_uploads:
+                        if file_id and file_id not in st.session_state.my_uploads:
                             st.session_state.my_uploads.append(file_id)
                             
                         success_count += 1
                     except Exception as e:
-                        st.error(f"Failed to upload {uploaded_file.name}: {e}")
+                        failed_files.append((uploaded_file.name, str(e)))
                     
                     progress_bar.progress((index + 1) / total_files)
                 
                 status_text.empty()
                 progress_bar.empty()
-                st.success(f"Successfully uploaded {success_count} of {total_files} memories!")
+                
+                if success_count > 0:
+                    st.success(f"Successfully uploaded {success_count} of {total_files} memories!")
+                if failed_files:
+                    st.error(f"Failed to upload {len(failed_files)} file(s):")
+                    for fname, err in failed_files:
+                        st.write(f"- **{fname}**: {err}")
 
 with tab2:
     st.header("Wedding Gallery")
@@ -155,21 +156,15 @@ with tab2:
         try:
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
             
-            results = None
-            for attempt in range(3):
-                try:
-                    results = drive_service.files().list(
-                        q=query,
-                        pageSize=100,
-                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
-                        orderBy="createdTime desc"
-                    ).execute()
-                    break
-                except (ssl.SSLError, socket.timeout, Exception) as net_err:
-                    if attempt == 2:
-                        raise net_err
+            # Attempt to fetch files and expose any specific error message
+            results = drive_service.files().list(
+                q=query,
+                pageSize=100,
+                fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
+                orderBy="createdTime desc"
+            ).execute()
             
-            files = results.get('files', []) if files else []
+            files = results.get('files', []) if results else []
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
@@ -190,7 +185,6 @@ with tab2:
                         st.write(f"**{len(active_selected_links)} selected**")
                     with col_b2:
                         if st.button("📥 Download Selected"):
-                            # Sequential JavaScript trigger drops files straight into device downloads folder
                             js_code = ""
                             for i, link in enumerate(active_selected_links):
                                 js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
@@ -210,7 +204,6 @@ with tab2:
                             web_link = file.get('webViewLink', '#')
                             is_mine = file_id in st.session_state.my_uploads
                             
-                            # Thumbnail Media Preview (Clicking image opens full view in new tab without downloading)
                             if 'image' in mime_type and thumb_link:
                                 img_src = thumb_link.replace('=s220', '=s600')
                                 thumbnail_html = f'''
@@ -231,7 +224,6 @@ with tab2:
                             
                             st.markdown(thumbnail_html, unsafe_allow_html=True)
                             
-                            # Selection checkbox and device-owner delete button
                             act_c1, act_c2 = st.columns([0.7, 0.3])
                             with act_c1:
                                 st.checkbox("Select", key=f"sel_{file_id}", label_visibility="collapsed")
@@ -253,4 +245,4 @@ with tab2:
                             pass
 
         except Exception as e:
-            st.warning("Connection hiccup communicating with Google Drive. Please refresh the page.")
+            st.error(f"Google Drive Error: {e}")

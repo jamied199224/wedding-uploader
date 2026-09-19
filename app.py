@@ -370,62 +370,62 @@ with tab2:
                         cursor: not-allowed;
                     }}
 
-                    /* LIGHTBOX MODAL OVERLAY */
+                    /* LIGHTBOX MODAL OVERLAY (TAP BACKDROP TO CLOSE) */
                     .modal-overlay {{
                         display: none;
                         position: fixed;
                         top: 0; left: 0;
                         width: 100vw; height: 100vh;
-                        background: #000;
+                        background: rgba(0, 0, 0, 0.85);
                         z-index: 99999;
                         justify-content: center;
                         align-items: center;
                     }}
-                    
-                    /* FULLSCREEN MODAL ELEMENT STYLING */
-                    .modal-overlay:fullscreen, .modal-overlay:-webkit-full-screen {{
-                        width: 100vw !important;
-                        height: 100vh !important;
-                        background: #000 !important;
-                        display: flex !important;
-                        justify-content: center !important;
-                        align-items: center !important;
-                    }}
 
+                    /* 90% SCREEN MODAL CONTAINER */
                     .modal-content-wrapper {{
                         position: relative;
-                        width: 100vw;
-                        height: 100vh;
+                        max-width: 90vw;
+                        max-height: 90vh;
                         display: flex;
                         justify-content: center;
                         align-items: center;
                     }}
+
                     .modal-img {{
-                        max-width: 100vw;
-                        max-height: 100vh;
+                        max-width: 90vw;
+                        max-height: 90vh;
                         width: auto;
                         height: auto;
                         object-fit: contain;
+                        border-radius: 8px;
+                        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
                     }}
+
                     .modal-iframe {{
-                        width: 100vw;
-                        height: 100vh;
+                        width: 90vw;
+                        height: 75vh;
+                        max-width: 90vw;
+                        max-height: 90vh;
                         border: none;
+                        border-radius: 8px;
                         background: #000;
+                        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
                     }}
+
                     .close-modal-btn {{
                         position: absolute;
-                        top: 16px;
-                        right: 16px;
+                        top: -14px;
+                        right: -14px;
                         color: #fff;
-                        font-size: 22px;
+                        font-size: 18px;
                         font-weight: bold;
                         cursor: pointer;
-                        background: rgba(0, 0, 0, 0.7);
-                        border: 1px solid rgba(255, 255, 255, 0.4);
+                        background: rgba(0, 0, 0, 0.85);
+                        border: 2px solid #fff;
                         border-radius: 50%;
-                        width: 38px;
-                        height: 38px;
+                        width: 32px;
+                        height: 32px;
                         display: flex;
                         align-items: center;
                         justify-content: center;
@@ -447,7 +447,7 @@ with tab2:
                     <div id="lightbox" class="modal-overlay" onclick="closeModal()">
                         <div class="modal-content-wrapper" onclick="event.stopPropagation()">
                             <div class="close-modal-btn" onclick="closeModal()">✕</div>
-                            <div id="modal-body" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;"></div>
+                            <div id="modal-body"></div>
                         </div>
                     </div>
 
@@ -457,18 +457,11 @@ with tab2:
                             const modalBody = document.getElementById('modal-body');
                             
                             if (isVideo) {{
-                                modalBody.innerHTML = '<iframe src="' + previewUrl + '" class="modal-iframe" allow="autoplay; fullscreen"></iframe>';
+                                modalBody.innerHTML = '<iframe src="' + previewUrl + '" class="modal-iframe" allow="autoplay"></iframe>';
                             }} else {{
                                 modalBody.innerHTML = '<img src="' + fullImg + '" class="modal-img" />';
                             }}
                             lightbox.style.display = 'flex';
-
-                            // Trigger Fullscreen API to occupy full mobile display
-                            if (lightbox.requestFullscreen) {{
-                                lightbox.requestFullscreen().catch(err => {{}});
-                            }} else if (lightbox.webkitRequestFullscreen) {{
-                                lightbox.webkitRequestFullscreen();
-                            }}
                         }}
 
                         function closeModal() {{
@@ -476,14 +469,6 @@ with tab2:
                             const modalBody = document.getElementById('modal-body');
                             lightbox.style.display = 'none';
                             modalBody.innerHTML = '';
-
-                            if (document.fullscreenElement || document.webkitFullscreenElement) {{
-                                if (document.exitFullscreen) {{
-                                    document.exitFullscreen().catch(err => {{}});
-                                }} else if (document.webkitExitFullscreen) {{
-                                    document.webkitExitFullscreen();
-                                }}
-                            }}
                         }}
 
                         function updateCount(e) {{

@@ -100,29 +100,29 @@ def load_likes_from_sheet(sheets_service, spreadsheet_id):
     try:
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
-            range="Sheet1!A:B"
+            range="A:B"
         ).execute()
         rows = result.get('values', [])
         likes_dict = {}
         for row in rows:
-            if len(row) >= 2:
-                fid, count_str = row[0], row[1]
+            if len(row) >= 1:
+                fid = row[0]
+                count_str = row[1] if len(row) > 1 else "0"
                 try:
                     likes_dict[fid] = int(count_str)
                 except ValueError:
                     likes_dict[fid] = 0
         return likes_dict
     except Exception as e:
-        print(f"Error loading likes from sheet: {e}")
+        st.error(f"Error loading likes from sheet: {e}")
         return {}
 
 def update_like_in_sheet(sheets_service, spreadsheet_id, file_id, delta):
     """Atomically update a specific file's like count in the Google Sheet."""
     try:
-        # Get all current rows
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
-            range="Sheet1!A:B"
+            range="A:B"
         ).execute()
         rows = result.get('values', [])
         
@@ -140,23 +140,23 @@ def update_like_in_sheet(sheets_service, spreadsheet_id, file_id, delta):
                 new_count = max(0, cur + delta)
                 updated_rows.append([file_id, str(new_count)])
             else:
-                updated_rows.append(row)
+                if len(row) > 0:
+                    updated_rows.append(row)
                 
         if not found:
             new_count = max(0, delta)
             updated_rows.append([file_id, str(new_count)])
             
-        # Write back to sheet
         body = {'values': updated_rows}
         sheets_service.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
-            range="Sheet1!A1",
+            range="A1",
             valueInputOption="RAW",
             body=body
         ).execute()
         return new_count
     except Exception as e:
-        print(f"Error updating sheet: {e}")
+        st.error(f"Error updating sheet: {e}")
         return None
 
 def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
@@ -208,21 +208,18 @@ if "delete_id" in params and drive_service:
         if del_id in st.session_state.my_uploads:
             st.session_state.my_uploads.remove(del_id)
         if spreadsheet_id and sheets_service:
-            # Remove from spreadsheet as well
-            result = sheets_service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range="Sheet1!A:B").execute()
+            result = sheets_service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range="A:B").execute()
             rows = result.get('values', [])
             new_rows = [r for r in rows if len(r) > 0 and r[0] != del_id]
-            sheets_service.spreadsheets().values().clear(spreadsheetId=spreadsheet_id, range="Sheet1!A:B").execute()
+            sheets_service.spreadsheets().values().clear(spreadsheetId=spreadsheet_id, range="A:B").execute()
             if new_rows:
                 sheets_service.spreadsheets().values().update(
-                    spreadsheetId=spreadsheet_id, range="Sheet1!A1", valueInputOption="RAW", body={'values': new_rows}
+                    spreadsheetId=spreadsheet_id, range="A1", valueInputOption="RAW", body={'values': new_rows}
                 ).execute()
         st.success("Memory deleted!")
     except Exception as e:
         st.error(f"Delete failed: {e}")
-    for key in ["delete_id", "_t"]:
-        if key in st.query_params:
-            del st.query_params[key]
+    st.query_params.clear()
     st.rerun()
 
 if "like_id" in params and sheets_service and spreadsheet_id:
@@ -234,9 +231,7 @@ if "like_id" in params and sheets_service and spreadsheet_id:
     except Exception as e:
         st.error(f"Like update failed: {e}")
     
-    for key in ["like_id", "action", "_t"]:
-        if key in st.query_params:
-            del st.query_params[key]
+    st.query_params.clear()
     st.rerun()
 
 st.title("💍 Jamie & Millie's Wedding Album")
@@ -298,7 +293,7 @@ with tab1:
                                 if file_id not in st.session_state.my_uploads:
                                     st.session_state.my_uploads.append(file_id)
                                 if spreadsheet_id and sheets_service:
-                                    update_like_in_sheet(sheets_service, spreadsheet_id, file_id, 0) # Initialize to 0
+                                    update_like_in_sheet(sheets_service, spreadsheet_id, file_id, 0)
                             uploaded_successfully = True
                             success_count += 1
                             break
@@ -370,9 +365,7 @@ with tab2:
                     )
                 with col_z2:
                     if st.button("Close / Done"):
-                        for key in ["zip_ids", "_t"]:
-                            if key in st.query_params:
-                                del st.query_params[key]
+                        st.query_params.clear()
                         st.rerun()
                 st.markdown("---")
             except Exception as e:

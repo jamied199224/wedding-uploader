@@ -3,6 +3,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
+import time
 
 # Page configuration
 st.set_page_config(
@@ -12,8 +13,9 @@ st.set_page_config(
 )
 
 # --- PERSONAL TOUCH: PHOTO & TITLE ---
-# If you have an image URL or local file for you and Millie, display it here:
-# st.image("path_to_your_picture.jpg", width=300) 
+# Uncomment and update the filename if you upload a picture of you and Millie to your repo:
+# st.image("millie_and_jamie.jpg", width=300) 
+
 st.title("💍 Jamie & Millie's Wedding Album")
 st.write("Welcome! Please share your favorite photos and videos from our special day with us, and browse memories uploaded so far.")
 
@@ -42,18 +44,28 @@ tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Guest Gallery"])
 
 with tab1:
     st.header("Upload Photos & Videos")
-    uploaded_file = st.file_uploader(
-        "Choose a file", 
-        type=["jpg", "jpeg", "png", "mp4", "mov"]
+    
+    # accept_multiple_files allows selecting more than one file at a time
+    uploaded_files = st.file_uploader(
+        "Choose photos or videos", 
+        type=["jpg", "jpeg", "png", "mp4", "mov"],
+        accept_multiple_files=True
     )
-    guest_name = st.text_input("Your Name")
+    guest_name = st.text_input("Your Name (Optional)")
 
-    if uploaded_file is not None:
+    if uploaded_files:
         if st.button("Submit to Wedding Album"):
             if not drive_service:
-                st.error("Google services are not initialized.")
+                st.error("Google services are not initialized. Check your secrets.")
             else:
-                with st.spinner("Safely uploading your memory..."):
+                total_files = len(uploaded_files)
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                success_count = 0
+                
+                for index, uploaded_file in enumerate(uploaded_files):
+                    status_text.text(f"Uploading file {index + 1} of {total_files}: {uploaded_file.name}...")
                     try:
                         file_metadata = {
                             'name': f"{guest_name or 'Guest'}_{uploaded_file.name}"
@@ -64,15 +76,23 @@ with tab1:
                             resumable=True
                         )
 
+                        # Upload to Drive securely within the sandbox boundary
                         file = drive_service.files().create(
                             body=file_metadata,
                             media_body=media,
                             fields='id, webViewLink, thumbnailLink'
                         ).execute()
-
-                        st.success("Thank you! Your memory has been added successfully.")
+                        
+                        success_count += 1
                     except Exception as e:
-                        st.error(f"Upload failed: {e}")
+                        st.error(f"Failed to upload {uploaded_file.name}: {e}")
+                    
+                    # Update progress bar smoothly
+                    progress_bar.progress((index + 1) / total_files)
+                
+                status_text.empty()
+                progress_bar.empty()
+                st.success(f"Thank you! Successfully uploaded {success_count} of {total_files} memories to our wedding album.")
 
 with tab2:
     st.header("Wedding Gallery")
@@ -80,7 +100,7 @@ with tab2:
     
     if drive_service:
         try:
-            # Query files created by the app (sandboxed securely)
+            # Query files created by the app securely
             results = drive_service.files().list(
                 pageSize=50,
                 fields="files(id, name, webViewLink, thumbnailLink, mimeType)",
@@ -91,21 +111,19 @@ with tab2:
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                # Display files in a clean grid
                 cols = st.columns(2)
                 for idx, file in enumerate(files):
                     col = cols[idx % 2]
                     with col:
                         st.write(f"**{file.get('name', 'Memory')}**")
-                        if 'image' in file.get('mimeType', ''):
-                            # Show thumbnail if available
+                        mime_type = file.get('mimeType', '')
+                        if 'image' in mime_type:
                             thumb_link = file.get('thumbnailLink')
                             if thumb_link:
                                 st.image(thumb_link.replace('=s220', '=s600'), use_container_width=True)
-                        elif 'video' in file.get('mimeType', ''):
+                        elif 'video' in mime_type:
                             st.info("🎥 Video File")
                         
-                        # Provide direct view/download links
                         st.markdown(f"[View / Download]({file.get('webViewLink')})", unsafe_allow_html=True)
                         st.divider()
         except Exception as e:

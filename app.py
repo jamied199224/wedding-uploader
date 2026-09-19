@@ -17,29 +17,10 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
+if 'selected_files' not in st.session_state:
+    st.session_state.selected_files = set()
 
-# Handle deletion via query params safely
-params = st.query_params
-if "delete_id" in params:
-    del_id = params["delete_id"]
-    try:
-        creds = Credentials(
-            token=None,
-            refresh_token=st.secrets["refresh_token"],
-            client_id=st.secrets["client_id"],
-            client_secret=st.secrets["client_secret"],
-            token_uri="https://oauth2.googleapis.com/token",
-        )
-        ds = build('drive', 'v3', credentials=creds)
-        ds.files().delete(fileId=del_id).execute()
-        if del_id in st.session_state.my_uploads:
-            st.session_state.my_uploads.remove(del_id)
-    except Exception as e:
-        st.error(f"Delete failed: {e}")
-    del st.query_params["delete_id"]
-    st.rerun()
-
-# CSS for true 3-column mobile grid with zero horizontal scroll
+# CSS for a true Google Photos style 3-column grid with inline thumbnail overlays
 st.markdown("""
 <style>
     .main .block-container {
@@ -77,31 +58,6 @@ st.markdown("""
         background: #222;
         color: white;
         font-size: 12px;
-    }
-    .delete-overlay {
-        position: absolute;
-        top: 4px;
-        right: 4px;
-        width: 24px;
-        height: 24px;
-        border-radius: 50%;
-        background: rgba(0, 0, 0, 0.6);
-        border: 1px solid white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-size: 11px;
-        text-decoration: none;
-        z-index: 10;
-    }
-    .view-link {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        z-index: 5;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -217,66 +173,80 @@ with tab2:
                         raise net_err
                     time.sleep(1)
             
-            # Fixed variable reference here:
             files = results.get('files', []) if results else []
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                active_selected_links = []
-                
-                # Render grid
-                grid_html = '<div class="google-photos-grid">'
-                for file in files:
-                    file_id = file.get('id')
-                    mime_type = file.get('mimeType', '')
-                    thumb_link = file.get('thumbnailLink')
-                    web_link = file.get('webViewLink', '#')
-                    is_mine = file_id in st.session_state.my_uploads
-                    
-                    if 'image' in mime_type and thumb_link:
-                        img_src = thumb_link.replace('=s220', '=s400')
-                        media_content = f'<img src="{img_src}" alt="Memory">'
-                    else:
-                        media_content = '<div class="video-badge">▶ Video</div>'
-                    
-                    delete_btn_html = f'<a href="?delete_id={file_id}" class="delete-overlay" title="Delete">✕</a>' if is_mine else ''
-                    
-                    grid_html += f'''
-                    <div class="photo-card">
-                        <a href="{web_link}" target="_blank" class="view-link"></a>
-                        {media_content}
-                        {delete_btn_html}
-                    </div>
-                    '''
-                grid_html += '</div>'
-                
-                st.markdown(grid_html, unsafe_allow_html=True)
-
-                # Native checkboxes underneath each thumbnail for clean multi-select batch downloading
-                st.write("### Select items to download:")
-                cols = st.columns(3)
-                for idx, file in enumerate(files):
-                    file_id = file.get('id')
-                    with cols[idx % 3]:
-                        is_sel = st.checkbox(f"Select #{idx+1}", key=f"sel_{file_id}")
-                        if is_sel and file.get('webContentLink'):
-                            active_selected_links.append(file['webContentLink'])
-
-                if active_selected_links:
+                # Top action bar if any items are selected
+                active_selected = list(st.session_state.selected_files)
+                if active_selected:
                     st.markdown("---")
                     col_b1, col_b2 = st.columns([0.5, 0.5])
                     with col_b1:
-                        st.write(f"**{len(active_selected_links)} items selected**")
+                        st.write(f"**{len(active_selected)} items selected**")
                     with col_b2:
                         if st.button("📥 Download Selected"):
                             js_code = ""
-                            for i, link in enumerate(active_selected_links):
-                                js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
+                            for i, fid in enumerate(active_selected):
+                                matched = next((f for f in files if f['id'] == fid), None)
+                                if matched and matched.get('webContentLink'):
+                                    link = matched['webContentLink']
+                                    js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
                             if js_code:
                                 st.components.v1.html(f"<script>{js_code}</script>", height=0)
                                 st.success("Downloading straight to your device folder...")
                     st.markdown("---")
+
+                # Render grid layout using Streamlit columns natively so checkboxes live seamlessly right under each photo without page jumps
+                for i in range(0, len(files), 3):
+                    row_files = files[i:i+3]
+                    cols = st.columns(3)
+                    
+                    for idx, file in enumerate(row_files):
+                        with cols[idx]:
+                            file_id = file.get('id')
+                            mime_type = file.get('mimeType', '')
+                            thumb_link = file.get('thumbnailLink')
+                            web_link = file.get('webViewLink', '#')
+                            is_mine = file_id in st.session_state.my_uploads
+                            
+                            # Thumbnail container
+                            if 'image' in mime_type and thumb_link:
+                                img_src = thumb_link.replace('=s220', '=s400')
+                                st.markdown(f'''
+                                <div class="photo-card">
+                                    <a href="{web_link}" target="_blank" style="position:absolute; width:100%; height:100%; z-index:2;"></a>
+                                    <img src="{img_src}" alt="Memory">
+                                </div>
+                                ''', unsafe_allow_html=True)
+                            else:
+                                st.markdown(f'''
+                                <div class="photo-card">
+                                    <a href="{web_link}" target="_blank" style="position:absolute; width:100%; height:100%; z-index:2;"></a>
+                                    <div class="video-badge">▶ Video</div>
+                                </div>
+                                ''', unsafe_allow_html=True)
+                            
+                            # Compact controls right below each individual thumbnail
+                            c_sel, c_del = st.columns([0.7, 0.3])
+                            with c_sel:
+                                is_checked = st.checkbox("Select", key=f"sel_{file_id}", label_visibility="collapsed")
+                                if is_checked:
+                                    if file_id not in st.session_state.selected_files:
+                                      st.session_state.selected_files.add(file_id)
+                                else:
+                                    if file_id in st.session_state.selected_files:
+                                      st.session_state.selected_files.remove(file_id)
+                            with c_del:
+                                if is_mine:
+                                    if st.button("🗑️", key=f"del_{file_id}", help="Delete your upload"):
+                                        drive_service.files().delete(fileId=file_id).execute()
+                                        if file_id in st.session_state.my_uploads:
+                                            st.session_state.my_uploads.remove(file_id)
+                                        if file_id in st.session_state.selected_files:
+                                            st.session_state.selected_files.remove(file_id)
+                                        st.rerun()
 
         except Exception as e:
             st.error(f"Google Drive Error: {e}")

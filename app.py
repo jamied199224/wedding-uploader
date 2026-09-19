@@ -1,11 +1,12 @@
 import streamlit as st
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 import io
 import socket
 import ssl
 import time
+import zipfile
 
 st.set_page_config(
     page_title="Jamie & Millie's Wedding Album",
@@ -17,9 +18,6 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
-
-st.title("💍 Jamie & Millie's Wedding Album")
-st.write("Welcome! Share your favorite moments and browse live memories below.")
 
 @st.cache_resource
 def get_google_services():
@@ -38,6 +36,24 @@ def get_google_services():
         return None
 
 drive_service = get_google_services()
+
+# --- HANDLE QUERY PARAMS (Delete actions) ---
+params = st.query_params
+
+if "delete_id" in params and drive_service:
+    del_id = params["delete_id"]
+    try:
+        drive_service.files().delete(fileId=del_id).execute()
+        if del_id in st.session_state.my_uploads:
+            st.session_state.my_uploads.remove(del_id)
+        st.success("Memory deleted!")
+    except Exception as e:
+        st.error(f"Delete failed: {e}")
+    del st.query_params["delete_id"]
+    st.rerun()
+
+st.title("💍 Jamie & Millie's Wedding Album")
+st.write("Welcome! Share your favorite moments and browse live memories below.")
 
 tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
@@ -111,6 +127,44 @@ with tab1:
 with tab2:
     st.header("Wedding Gallery")
     
+    # --- HANDLE ZIP ARCHIVE CREATION ---
+    if "zip_ids" in params and drive_service:
+        zip_ids = params["zip_ids"].split(",")
+        with st.spinner(f"Packaging {len(zip_ids)} memories into a ZIP folder..."):
+            try:
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for fid in zip_ids:
+                        f_meta = drive_service.files().get(fileId=fid, fields="name").execute()
+                        req = drive_service.files().get_media(fileId=fid)
+                        file_bytes = io.BytesIO()
+                        downloader = MediaIoBaseDownload(file_bytes, req)
+                        done = False
+                        while not done:
+                            _, done = downloader.next_chunk()
+                        file_name = f_meta.get("name", f"wedding_photo_{fid}.jpg")
+                        zf.writestr(file_name, file_bytes.getvalue())
+                
+                zip_buffer.seek(0)
+                st.success("Your ZIP folder is ready!")
+                
+                col_z1, col_z2 = st.columns([0.6, 0.4])
+                with col_z1:
+                    st.download_button(
+                        label="💾 Save ZIP Folder",
+                        data=zip_buffer,
+                        file_name="wedding_memories.zip",
+                        mime="application/zip",
+                        type="primary"
+                    )
+                with col_z2:
+                    if st.button("Close / Done"):
+                        del st.query_params["zip_ids"]
+                        st.rerun()
+                st.markdown("---")
+            except Exception as e:
+                st.error(f"Error creating ZIP: {e}")
+
     if drive_service:
         try:
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
@@ -134,23 +188,25 @@ with tab2:
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                # Custom HTML component rendering a rigid CSS 3-column grid with native overlays
                 html_items = []
                 for file in files:
                     fid = file.get('id')
                     mime = file.get('mimeType', '')
                     thumb = file.get('thumbnailLink', '').replace('=s220', '=s400')
                     view_url = file.get('webViewLink', '#')
-                    dl_url = file.get('webContentLink', '#')
+                    is_mine = fid in st.session_state.my_uploads
                     
                     if 'image' in mime and thumb:
                         media_content = f'<img src="{thumb}" alt="Photo" />'
                     else:
                         media_content = '<div class="video-label">▶ Video</div>'
+                    
+                    delete_html = f'<button class="delete-btn" title="Delete Photo" onclick="deleteItem(\'{fid}\')">✕</button>' if is_mine else ''
                         
                     html_items.append(f'''
                     <div class="grid-card">
-                        <input type="checkbox" class="select-check" data-dl="{dl_url}" onclick="updateCount()" />
+                        <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount()" />
+                        {delete_html}
                         <a href="{view_url}" target="_blank" class="card-link">{media_content}</a>
                     </div>
                     ''')
@@ -163,7 +219,7 @@ with tab2:
                     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
                     body {{ background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
                     
-                    /* STRICT 3-COLUMN GRID locked across all mobile viewports */
+                    /* FIXED 3-COLUMN MOBILE GRID */
                     .gallery-grid {{
                         display: grid !important;
                         grid-template-columns: repeat(3, 1fr) !important;
@@ -204,22 +260,41 @@ with tab2:
                         background: #222;
                     }}
                     
-                    /* TOP-LEFT OVERLAY CHECKBOX */
+                    /* TOP-LEFT OVERLAY: CHECKBOX */
                     .select-check {{
                         position: absolute;
                         top: 6px;
                         left: 6px;
                         z-index: 10;
-                        width: 20px;
-                        height: 20px;
-                        accent-color: #ff4b4b;
+                        width: 22px;
+                        height: 22px;
+                        accent-color: #1a73e8;
                         cursor: pointer;
+                    }}
+
+                    /* TOP-RIGHT OVERLAY: DELETE BUTTON */
+                    .delete-btn {{
+                        position: absolute;
+                        top: 6px;
+                        right: 6px;
+                        z-index: 10;
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 50%;
+                        background: rgba(0, 0, 0, 0.65);
+                        border: 1px solid rgba(255, 255, 255, 0.8);
+                        color: white;
+                        font-size: 11px;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
                     }}
                     
                     /* ACTION BAR */
                     .action-bar {{
                         margin-top: 12px;
-                        padding: 10px;
+                        padding: 10px 14px;
                         background: #1e1e1e;
                         border-radius: 8px;
                         display: flex;
@@ -229,7 +304,7 @@ with tab2:
                     }}
                     
                     .dl-btn {{
-                        background: #ff4b4b;
+                        background: #1a73e8;
                         color: #fff;
                         border: none;
                         padding: 8px 16px;
@@ -238,7 +313,8 @@ with tab2:
                         cursor: pointer;
                     }}
                     .dl-btn:disabled {{
-                        background: #555;
+                        background: #444;
+                        color: #888;
                         cursor: not-allowed;
                     }}
                 </style>
@@ -250,7 +326,7 @@ with tab2:
                     
                     <div class="action-bar">
                         <span id="count-text">0 items selected</span>
-                        <button id="dl-btn" class="dl-btn" onclick="downloadSelected()" disabled>📥 Download</button>
+                        <button id="dl-btn" class="dl-btn" onclick="prepareZipDownload()" disabled>📦 Download ZIP</button>
                     </div>
 
                     <script>
@@ -262,23 +338,27 @@ with tab2:
                             btn.disabled = checked.length === 0;
                         }}
 
-                        function downloadSelected() {{
+                        function prepareZipDownload() {{
                             const checked = document.querySelectorAll('.select-check:checked');
-                            checked.forEach((cb, i) => {{
-                                const url = cb.getAttribute('data-dl');
-                                if (url && url !== '#') {{
-                                    setTimeout(() => {{
-                                        window.open(url, '_blank');
-                                    }}, i * 300);
-                                }}
+                            const ids = [];
+                            checked.forEach(cb => {{
+                                ids.push(cb.getAttribute('data-id'));
                             }});
+                            if (ids.length > 0) {{
+                                window.parent.location.search = '?zip_ids=' + ids.join(',');
+                            }}
+                        }}
+
+                        function deleteItem(fid) {{
+                            if (confirm("Delete this photo from the album?")) {{
+                                window.parent.location.search = '?delete_id=' + fid;
+                            }}
                         }}
                     </script>
                 </body>
                 </html>
                 '''
                 
-                # Render gallery frame with calculated dynamic height
                 grid_rows = (len(files) + 2) // 3
                 calculated_height = (grid_rows * 130) + 80
                 st.components.v1.html(gallery_html, height=calculated_height, scrolling=False)

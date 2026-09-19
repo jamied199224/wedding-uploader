@@ -30,10 +30,6 @@ if 'my_uploads' not in st.session_state:
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 
-# In-memory cache to bypass Google Drive replication lag
-if 'likes_cache' not in st.session_state:
-    st.session_state.likes_cache = {}
-
 def get_credentials():
     """Retrieve and refresh Google OAuth credentials."""
     creds = Credentials(
@@ -48,18 +44,119 @@ def get_credentials():
     return creds
 
 def create_drive_service():
-    """Create a fresh Google Drive service with clean SSL socket settings."""
+    """Create a fresh Google Drive service."""
     creds = get_credentials()
     http = httplib2.Http(timeout=120)
     authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
     return build('drive', 'v3', http=authorized_http)
 
+def create_sheets_service():
+    """Create a fresh Google Sheets service."""
+    creds = get_credentials()
+    http = httplib2.Http(timeout=120)
+    authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
+    return build('sheets', 'v4', http=authorized_http)
+
 @st.cache_resource
 def get_google_services():
     try:
-        return create_drive_service()
+        drive = create_drive_service()
+        sheets = create_sheets_service()
+        return drive, sheets
     except Exception as e:
         st.error(f"Failed to authenticate with Google: {e}")
+        return None, None
+
+def get_or_create_likes_spreadsheet(drive_service, sheets_service, folder_id):
+    """Find or create the Google Sheet used to store like counts."""
+    query = f"'{folder_id}' in parents and name='wedding_likes_db' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+    res = drive_service.files().list(q=query, fields="files(id)").execute()
+    files = res.get('files', [])
+    
+    if files:
+        return files[0]['id']
+        
+    # Create new spreadsheet if it doesn't exist
+    spreadsheet_body = {
+        'properties': {'title': 'wedding_likes_db'}
+    }
+    sheet = sheets_service.spreadsheets().create(body=spreadsheet_body, fields='spreadsheetId').execute()
+    sheet_id = sheet.get('spreadsheetId')
+    
+    # Move sheet into the target wedding folder
+    file_obj = drive_service.files().get(fileId=sheet_id, fields='parents').execute()
+    previous_parents = ",".join(file_obj.get('parents', []))
+    drive_service.files().update(
+        fileId=sheet_id,
+        addParents=folder_id,
+        removeParents=previous_parents,
+        fields='id, parents'
+    ).execute()
+    
+    return sheet_id
+
+def load_likes_from_sheet(sheets_service, spreadsheet_id):
+    """Load all file IDs and their like counts from the Google Sheet."""
+    try:
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range="Sheet1!A:B"
+        ).execute()
+        rows = result.get('values', [])
+        likes_dict = {}
+        for row in rows:
+            if len(row) >= 2:
+                fid, count_str = row[0], row[1]
+                try:
+                    likes_dict[fid] = int(count_str)
+                except ValueError:
+                    likes_dict[fid] = 0
+        return likes_dict
+    except Exception as e:
+        print(f"Error loading likes from sheet: {e}")
+        return {}
+
+def update_like_in_sheet(sheets_service, spreadsheet_id, file_id, delta):
+    """Atomically update a specific file's like count in the Google Sheet."""
+    try:
+        # Get all current rows
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range="Sheet1!A:B"
+        ).execute()
+        rows = result.get('values', [])
+        
+        found = False
+        new_count = 0
+        updated_rows = []
+        
+        for row in rows:
+            if len(row) >= 1 and row[0] == file_id:
+                found = True
+                try:
+                    cur = int(row[1]) if len(row) > 1 else 0
+                except ValueError:
+                    cur = 0
+                new_count = max(0, cur + delta)
+                updated_rows.append([file_id, str(new_count)])
+            else:
+                updated_rows.append(row)
+                
+        if not found:
+            new_count = max(0, delta)
+            updated_rows.append([file_id, str(new_count)])
+            
+        # Write back to sheet
+        body = {'values': updated_rows}
+        sheets_service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range="Sheet1!A1",
+            valueInputOption="RAW",
+            body=body
+        ).execute()
+        return new_count
+    except Exception as e:
+        print(f"Error updating sheet: {e}")
         return None
 
 def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
@@ -76,8 +173,7 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
     }
     metadata = {
         'name': file_name,
-        'parents': [folder_id],
-        'appProperties': {'likes': '0'}
+        'parents': [folder_id]
     }
     
     init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=60)
@@ -99,7 +195,8 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
     else:
         raise Exception(f"Upload failed ({upload_res.status_code}): {upload_res.text}")
 
-drive_service = get_google_services()
+drive_service, sheets_service = get_google_services()
+spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, TARGET_FOLDER_ID) if (drive_service and sheets_service) else None
 
 # --- HANDLE QUERY PARAMS (Delete & Like/Unlike actions) ---
 params = st.query_params
@@ -110,8 +207,16 @@ if "delete_id" in params and drive_service:
         drive_service.files().delete(fileId=del_id).execute()
         if del_id in st.session_state.my_uploads:
             st.session_state.my_uploads.remove(del_id)
-        if del_id in st.session_state.likes_cache:
-            del st.session_state.likes_cache[del_id]
+        if spreadsheet_id and sheets_service:
+            # Remove from spreadsheet as well
+            result = sheets_service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range="Sheet1!A:B").execute()
+            rows = result.get('values', [])
+            new_rows = [r for r in rows if len(r) > 0 and r[0] != del_id]
+            sheets_service.spreadsheets().values().clear(spreadsheetId=spreadsheet_id, range="Sheet1!A:B").execute()
+            if new_rows:
+                sheets_service.spreadsheets().values().update(
+                    spreadsheetId=spreadsheet_id, range="Sheet1!A1", valueInputOption="RAW", body={'values': new_rows}
+                ).execute()
         st.success("Memory deleted!")
     except Exception as e:
         st.error(f"Delete failed: {e}")
@@ -120,33 +225,12 @@ if "delete_id" in params and drive_service:
             del st.query_params[key]
     st.rerun()
 
-if "like_id" in params and drive_service:
+if "like_id" in params and sheets_service and spreadsheet_id:
     like_id = params["like_id"]
     action = params.get("action", "like")
+    delta = 1 if action == "like" else -1
     try:
-        # Fetch current appProperties from Drive
-        file_meta = drive_service.files().get(fileId=like_id, fields="appProperties").execute()
-        props = file_meta.get('appProperties', {}) or {}
-        drive_likes = int(props.get('likes', '0'))
-        
-        # Use cache if available and higher, to prevent race conditions with stale Drive index
-        cached_likes = st.session_state.likes_cache.get(like_id, drive_likes)
-        base_likes = max(drive_likes, cached_likes)
-        
-        if action == "like":
-            new_likes = base_likes + 1
-        else:
-            new_likes = max(0, base_likes - 1)
-            
-        # Update local session cache immediately
-        st.session_state.likes_cache[like_id] = new_likes
-        
-        # Update Google Drive backend
-        props['likes'] = str(new_likes)
-        drive_service.files().update(
-            fileId=like_id,
-            body={'appProperties': props}
-        ).execute()
+        update_like_in_sheet(sheets_service, spreadsheet_id, like_id, delta)
     except Exception as e:
         st.error(f"Like update failed: {e}")
     
@@ -210,9 +294,11 @@ with tab1:
                                 mime_type, 
                                 TARGET_FOLDER_ID
                             )
-                            if file_id and file_id not in st.session_state.my_uploads:
-                                st.session_state.my_uploads.append(file_id)
-                            st.session_state.likes_cache[file_id] = 0
+                            if file_id:
+                                if file_id not in st.session_state.my_uploads:
+                                    st.session_state.my_uploads.append(file_id)
+                                if spreadsheet_id and sheets_service:
+                                    update_like_in_sheet(sheets_service, spreadsheet_id, file_id, 0) # Initialize to 0
                             uploaded_successfully = True
                             success_count += 1
                             break
@@ -292,9 +378,9 @@ with tab2:
             except Exception as e:
                 st.error(f"Error creating ZIP: {e}")
 
-    if drive_service:
+    if drive_service and sheets_service:
         try:
-            query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
+            query = f"'{TARGET_FOLDER_ID}' in parents and name != 'wedding_likes_db' and trashed=false"
             results = None
             
             for attempt in range(3):
@@ -303,7 +389,7 @@ with tab2:
                     results = active_service.files().list(
                         q=query,
                         pageSize=100,
-                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType, appProperties)",
+                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
                         orderBy="createdTime desc"
                     ).execute()
                     break
@@ -313,6 +399,7 @@ with tab2:
                     time.sleep(1)
             
             files = results.get('files', []) if results else []
+            likes_dict = load_likes_from_sheet(sheets_service, spreadsheet_id)
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
@@ -328,16 +415,7 @@ with tab2:
                     is_mine = fid in st.session_state.my_uploads
                     is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
                     
-                    app_props = file.get('appProperties', {}) or {}
-                    try:
-                        drive_likes = int(app_props.get('likes', '0'))
-                    except ValueError:
-                        drive_likes = 0
-                    
-                    # Use cached likes if available to override any Google Drive replication delay
-                    cached_likes = st.session_state.likes_cache.get(fid, drive_likes)
-                    likes_count = max(drive_likes, cached_likes)
-                    st.session_state.likes_cache[fid] = likes_count
+                    likes_count = int(likes_dict.get(fid, 0))
                     
                     if '_' in raw_title:
                         uploader_name = raw_title.split('_', 1)[0].strip()

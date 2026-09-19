@@ -2,12 +2,15 @@ import streamlit as st
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+import google_auth_httplib2
+import httplib2
 import io
 import socket
+import ssl
 import time
 import zipfile
 
-# Set global socket timeout to 120s to prevent indefinite hangs
+# Global socket timeout
 socket.setdefaulttimeout(120)
 
 st.set_page_config(
@@ -21,18 +24,23 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
 
+def create_drive_service():
+    """Create a fresh Google Drive service with clean SSL socket settings."""
+    creds = Credentials(
+        token=None,
+        refresh_token=st.secrets["refresh_token"],
+        client_id=st.secrets["client_id"],
+        client_secret=st.secrets["client_secret"],
+        token_uri="https://oauth2.googleapis.com/token",
+    )
+    http = httplib2.Http(timeout=120)
+    authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
+    return build('drive', 'v3', http=authorized_http)
+
 @st.cache_resource
 def get_google_services():
     try:
-        creds = Credentials(
-            token=None,
-            refresh_token=st.secrets["refresh_token"],
-            client_id=st.secrets["client_id"],
-            client_secret=st.secrets["client_secret"],
-            token_uri="https://oauth2.googleapis.com/token",
-        )
-        drive_service = build('drive', 'v3', credentials=creds)
-        return drive_service
+        return create_drive_service()
     except Exception as e:
         st.error(f"Failed to authenticate with Google: {e}")
         return None
@@ -90,14 +98,15 @@ with tab1:
                     uploaded_successfully = False
                     last_err = None
                     
-                    for attempt in range(3):
+                    for attempt in range(4):
                         try:
+                            active_service = drive_service if attempt == 0 else create_drive_service()
+                            
                             file_metadata = {
                                 'name': f"{guest_name or 'Guest'}_{uploaded_file.name}",
                                 'parents': [TARGET_FOLDER_ID]
                             }
                             
-                            # Stream in 2MB chunks for resumable uploads
                             media = MediaIoBaseUpload(
                                 io.BytesIO(file_raw),
                                 mimetype=uploaded_file.type or 'application/octet-stream',
@@ -105,7 +114,7 @@ with tab1:
                                 resumable=True
                             )
                             
-                            request = drive_service.files().create(
+                            request = active_service.files().create(
                                 body=file_metadata,
                                 media_body=media,
                                 fields='id'
@@ -124,9 +133,9 @@ with tab1:
                             uploaded_successfully = True
                             success_count += 1
                             break
-                        except Exception as e:
+                        except (ssl.SSLError, socket.error, Exception) as e:
                             last_err = e
-                            time.sleep(2)
+                            time.sleep(1.5 * (attempt + 1))
                     
                     if not uploaded_successfully:
                         failed_files.append((uploaded_file.name, str(last_err)))
@@ -152,15 +161,23 @@ with tab2:
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                     for fid in zip_ids:
-                        f_meta = drive_service.files().get(fileId=fid, fields="name").execute()
-                        req = drive_service.files().get_media(fileId=fid)
-                        file_bytes = io.BytesIO()
-                        downloader = MediaIoBaseDownload(file_bytes, req)
-                        done = False
-                        while not done:
-                            _, done = downloader.next_chunk()
-                        file_name = f_meta.get("name", f"wedding_photo_{fid}.jpg")
-                        zf.writestr(file_name, file_bytes.getvalue())
+                        for attempt in range(3):
+                            try:
+                                active_service = drive_service if attempt == 0 else create_drive_service()
+                                f_meta = active_service.files().get(fileId=fid, fields="name").execute()
+                                req = active_service.files().get_media(fileId=fid)
+                                file_bytes = io.BytesIO()
+                                downloader = MediaIoBaseDownload(file_bytes, req)
+                                done = False
+                                while not done:
+                                    _, done = downloader.next_chunk()
+                                file_name = f_meta.get("name", f"wedding_photo_{fid}.jpg")
+                                zf.writestr(file_name, file_bytes.getvalue())
+                                break
+                            except Exception as dl_err:
+                                if attempt == 2:
+                                    raise dl_err
+                                time.sleep(1)
                 
                 zip_buffer.seek(0)
                 st.success("Your ZIP folder is ready!")
@@ -185,12 +202,22 @@ with tab2:
     if drive_service:
         try:
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
-            results = drive_service.files().list(
-                q=query,
-                pageSize=100,
-                fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
-                orderBy="createdTime desc"
-            ).execute()
+            results = None
+            
+            for attempt in range(3):
+                try:
+                    active_service = drive_service if attempt == 0 else create_drive_service()
+                    results = active_service.files().list(
+                        q=query,
+                        pageSize=100,
+                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
+                        orderBy="createdTime desc"
+                    ).execute()
+                    break
+                except (ssl.SSLError, socket.error, Exception) as net_err:
+                    if attempt == 2:
+                        raise net_err
+                    time.sleep(1)
             
             files = results.get('files', []) if results else []
 
@@ -201,22 +228,26 @@ with tab2:
                 for file in files:
                     fid = file.get('id')
                     mime = file.get('mimeType', '')
-                    thumb = file.get('thumbnailLink', '').replace('=s220', '=s400')
-                    view_url = file.get('webViewLink', '#')
+                    thumb_small = file.get('thumbnailLink', '').replace('=s220', '=s400')
+                    full_image = file.get('thumbnailLink', '').replace('=s220', '=s1200')
+                    preview_url = f"https://drive.google.com/file/d/{fid}/preview"
                     is_mine = fid in st.session_state.my_uploads
+                    is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
                     
-                    if 'image' in mime and thumb:
-                        media_content = f'<img src="{thumb}" alt="Photo" />'
+                    if not is_video and thumb_small:
+                        media_content = f'<img src="{thumb_small}" alt="Photo" />'
                     else:
                         media_content = '<div class="video-label">▶ Video</div>'
                     
-                    delete_html = f'<button class="delete-btn" title="Delete Photo" onclick="deleteItem(\'{fid}\')">✕</button>' if is_mine else ''
+                    delete_html = f'<button class="delete-btn" title="Delete Photo" onclick="deleteItem(event, \'{fid}\')">✕</button>' if is_mine else ''
                         
                     html_items.append(f'''
                     <div class="grid-card">
-                        <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount()" />
+                        <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount(event)" />
                         {delete_html}
-                        <a href="{view_url}" target="_blank" class="card-link">{media_content}</a>
+                        <div class="card-link" onclick="openModal('{full_image}', '{preview_url}', {'true' if is_video else 'false'})">
+                            {media_content}
+                        </div>
                     </div>
                     ''')
 
@@ -243,13 +274,13 @@ with tab2:
                         background: #111;
                         border-radius: 4px;
                         overflow: hidden;
+                        cursor: pointer;
                     }}
                     
                     .card-link {{
                         display: block;
                         width: 100%;
                         height: 100%;
-                        text-decoration: none;
                     }}
                     
                     .grid-card img {{
@@ -326,6 +357,56 @@ with tab2:
                         color: #888;
                         cursor: not-allowed;
                     }}
+
+                    /* LIGHTBOX MODAL OVERLAY */
+                    .modal-overlay {{
+                        display: none;
+                        position: fixed;
+                        top: 0; left: 0;
+                        width: 100vw; height: 100vh;
+                        background: rgba(0, 0, 0, 0.92);
+                        z-index: 9999;
+                        justify-content: center;
+                        align-items: center;
+                        padding: 10px;
+                    }}
+                    .modal-content-wrapper {{
+                        position: relative;
+                        max-width: 95%;
+                        max-height: 90vh;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                    }}
+                    .modal-img {{
+                        max-width: 100%;
+                        max-height: 85vh;
+                        object-fit: contain;
+                        border-radius: 6px;
+                    }}
+                    .modal-iframe {{
+                        width: 85vw;
+                        height: 70vh;
+                        border: none;
+                        border-radius: 6px;
+                        background: #000;
+                    }}
+                    .close-modal-btn {{
+                        position: absolute;
+                        top: -38px;
+                        right: 0px;
+                        color: #fff;
+                        font-size: 26px;
+                        font-weight: bold;
+                        cursor: pointer;
+                        background: rgba(255,255,255,0.2);
+                        border-radius: 50%;
+                        width: 32px;
+                        height: 32px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }}
                 </style>
                 </head>
                 <body>
@@ -338,8 +419,36 @@ with tab2:
                         <button id="dl-btn" class="dl-btn" onclick="prepareZipDownload()" disabled>📦 Download ZIP</button>
                     </div>
 
+                    <!-- LIGHTBOX MODAL CONTAINER -->
+                    <div id="lightbox" class="modal-overlay" onclick="closeModal()">
+                        <div class="modal-content-wrapper" onclick="event.stopPropagation()">
+                            <div class="close-modal-btn" onclick="closeModal()">✕</div>
+                            <div id="modal-body"></div>
+                        </div>
+                    </div>
+
                     <script>
-                        function updateCount() {{
+                        function openModal(fullImg, previewUrl, isVideo) {{
+                            const lightbox = document.getElementById('lightbox');
+                            const modalBody = document.getElementById('modal-body');
+                            
+                            if (isVideo) {{
+                                modalBody.innerHTML = '<iframe src="' + previewUrl + '" class="modal-iframe" allow="autoplay"></iframe>';
+                            }} else {{
+                                modalBody.innerHTML = '<img src="' + fullImg + '" class="modal-img" />';
+                            }}
+                            lightbox.style.display = 'flex';
+                        }}
+
+                        function closeModal() {{
+                            const lightbox = document.getElementById('lightbox');
+                            const modalBody = document.getElementById('modal-body');
+                            lightbox.style.display = 'none';
+                            modalBody.innerHTML = '';
+                        }}
+
+                        function updateCount(e) {{
+                            if (e) e.stopPropagation();
                             const checked = document.querySelectorAll('.select-check:checked');
                             const countText = document.getElementById('count-text');
                             const btn = document.getElementById('dl-btn');
@@ -358,7 +467,8 @@ with tab2:
                             }}
                         }}
 
-                        function deleteItem(fid) {{
+                        function deleteItem(e, fid) {{
+                            if (e) e.stopPropagation();
                             if (confirm("Delete this photo from the album?")) {{
                                 window.parent.location.search = '?delete_id=' + fid;
                             }}

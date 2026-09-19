@@ -20,7 +20,7 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
 
-# --- PERSONAL TOUCH: PHOTO & TITLE ---
+# --- PERSONAL TOUCH: TITLE ---
 st.title("💍 Jamie & Millie's Wedding Album")
 st.write("Welcome! Share your favorite moments and browse the live gallery below.")
 
@@ -45,7 +45,7 @@ def get_google_services():
 drive_service, sheets_service = get_google_services()
 
 # --- TAB LAYOUT ---
-tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Interactive Gallery"])
+tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
 with tab1:
     st.header("Upload Photos & Videos")
@@ -125,12 +125,9 @@ with tab2:
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                st.write("Check items below to select them. Your selected downloads will appear in a handy panel at the top!")
-                
-                # Dictionary to track selections across the grid
                 selected_files = []
 
-                # Grid layout (3 columns)
+                # Clean 3-column photo grid layout
                 cols = st.columns(3)
                 for idx, file in enumerate(files):
                     col = cols[idx % 3]
@@ -143,16 +140,22 @@ with tab2:
                             web_link = file.get('webViewLink', '#')
                             is_mine = file_id in st.session_state.my_uploads
                             
-                            # Card header with select checkbox and optional delete button
-                            header_cols = st.columns([0.6, 0.2, 0.2])
-                            with header_cols[0]:
-                                is_selected = st.checkbox("Select", key=f"sel_{file_id}", label_visibility="collapsed")
-                                if is_selected:
+                            # Clean image or video preview container
+                            if 'image' in mime_type and thumb_link:
+                                st.image(thumb_link.replace('=s220', '=s800'), use_container_width=True)
+                            elif 'video' in mime_type:
+                                st.markdown("🎥 **[Video File Preview]**")
+                            else:
+                                st.markdown("📁 *Media File*")
+                            
+                            # Minimalist action bar underneath each photo (Checkbox select, View link, Delete if mine)
+                            action_cols = st.columns([0.5, 0.3, 0.2])
+                            with action_cols[0]:
+                                if st.checkbox("Select", key=f"sel_{file_id}", label_visibility="collapsed"):
                                     selected_files.append((file_name, web_link))
-                            with header_cols[1]:
-                                display_name = file_name[:12] + "..." if len(file_name) > 12 else file_name
-                                st.markdown(f"**{display_name}**")
-                            with header_cols[2]:
+                            with action_cols[1]:
+                                st.markdown(f"[📥 Open]({web_link})")
+                            with action_cols[2]:
                                 if is_mine:
                                     if st.button("❌", key=f"del_{file_id}", help="Delete your upload"):
                                         deleted = False
@@ -166,32 +169,22 @@ with tab2:
                                                     raise
                                         if deleted:
                                             st.session_state.my_uploads.remove(file_id)
-                                            st.success("Deleted!")
                                             st.rerun()
                             
-                            # Thumbnail or placeholder rendering
-                            if 'image' in mime_type and thumb_link:
-                                st.image(thumb_link.replace('=s220', '=s400'), use_container_width=True)
-                            elif 'image' in mime_type:
-                                st.info("📷 Image File")
-                            else:
-                                st.info("🎥 Video File")
-                            
-                            st.markdown(f"[📥 Open / Download]({web_link})", unsafe_allow_html=True)
-                            st.divider()
+                            # Subtle spacing between rows
+                            st.write("")
                             
                         except Exception:
-                            st.warning("Item temporarily unavailable.")
+                            pass
 
-                # --- FLOATING / TOP BATCH DOWNLOAD PANEL ---
+                # --- FLOATING BATCH DOWNLOAD PANEL ---
                 if selected_files:
                     st.markdown("---")
                     st.subheader(f"📦 Selected for Download ({len(selected_files)} items)")
                     st.write("Click any link below to open and save your selected memories:")
                     
-                    # Display selected links neatly in columns
                     dl_cols = st.columns(min(len(selected_files), 3))
-                    for s_idx, (fname,flink) in enumerate(selected_files):
+                    for s_idx, (fname, flink) in enumerate(selected_files):
                         d_col = dl_cols[s_idx % len(dl_cols)]
                         with d_col:
                             st.markdown(f"- [{fname[:25]}]({flink})", unsafe_allow_html=True)

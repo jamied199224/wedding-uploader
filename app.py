@@ -1,6 +1,5 @@
 import streamlit as st
 import gspread
-import json
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -14,8 +13,8 @@ def init_connections():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    # Parse the complete JSON block securely and fix any escaped newlines
-    creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS_JSON"])
+    # Streamlit natively reads the [GOOGLE_CREDENTIALS_JSON] table as a dictionary
+    creds_dict = dict(st.secrets["GOOGLE_CREDENTIALS_JSON"])
     if "private_key" in creds_dict:
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         

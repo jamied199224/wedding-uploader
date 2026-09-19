@@ -9,7 +9,6 @@ import google_auth_httplib2
 import google.auth.transport.requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 import httplib2
 import streamlit as st
 
@@ -57,6 +56,44 @@ def get_google_services():
     except Exception as e:
         st.error(f"Failed to authenticate with Google: {e}")
         return None
+
+def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
+    """Upload large files reliably using requests to avoid httplib2 redirect issues."""
+    creds = get_credentials()
+    headers = {"Authorization": f"Bearer {creds.token}"}
+    
+    # Step 1: Initiate resumable upload session
+    init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
+    init_headers = {
+        **headers,
+        "X-Upload-Content-Type": mime_type,
+        "X-Upload-Content-Length": str(len(file_bytes)),
+        "Content-Type": "application/json; charset=UTF-8"
+    }
+    metadata = {
+        'name': file_name,
+        'parents': [folder_id]
+    }
+    
+    init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=60)
+    if init_res.status_code != 200:
+        raise Exception(f"Failed to start upload session: {init_res.text}")
+        
+    upload_url = init_res.headers.get('Location')
+    if not upload_url:
+        raise Exception("Upload session missing Location header from Google Drive.")
+        
+    # Step 2: Upload file bytes to session URL
+    put_headers = {
+        "Content-Type": mime_type,
+        "Content-Length": str(len(file_bytes))
+    }
+    upload_res = requests.put(upload_url, headers=put_headers, data=file_bytes, timeout=300)
+    
+    if upload_res.status_code in [200, 201]:
+        return upload_res.json().get('id')
+    else:
+        raise Exception(f"Upload failed ({upload_res.status_code}): {upload_res.text}")
 
 drive_service = get_google_services()
 
@@ -116,42 +153,23 @@ with tab1:
                     uploaded_successfully = False
                     last_err = None
                     
-                    for attempt in range(4):
-                        try:
-                            active_service = drive_service if attempt == 0 else create_drive_service()
-                            
-                            file_metadata = {
-                                'name': f"{guest_name or 'Guest'}_{uploaded_file.name}",
-                                'parents': [TARGET_FOLDER_ID]
-                            }
-                            
-                            media = MediaIoBaseUpload(
-                                io.BytesIO(file_raw),
-                                mimetype=uploaded_file.type or 'application/octet-stream',
-                                chunksize=2 * 1024 * 1024,
-                                resumable=True
-                            )
-                            
-                            request = active_service.files().create(
-                                body=file_metadata,
-                                media_body=media,
-                                fields='id'
-                            )
-                            
-                            response = None
-                            while response is None:
-                                status, response = request.next_chunk()
-                                if status:
-                                    pct = int(status.progress() * 100)
-                                    status_text.text(f"Uploading {index + 1}/{total_files}: {uploaded_file.name} ({pct}%)...")
+                    file_title = f"{guest_name or 'Guest'}_{uploaded_file.name}"
+                    mime_type = uploaded_file.type or 'application/octet-stream'
 
-                            file_id = response.get('id')
+                    for attempt in range(3):
+                        try:
+                            file_id = upload_file_to_drive(
+                                file_raw, 
+                                file_title, 
+                                mime_type, 
+                                TARGET_FOLDER_ID
+                            )
                             if file_id and file_id not in st.session_state.my_uploads:
                                 st.session_state.my_uploads.append(file_id)
                             uploaded_successfully = True
                             success_count += 1
                             break
-                        except (ssl.SSLError, socket.error, Exception) as e:
+                        except Exception as e:
                             last_err = e
                             time.sleep(1.5 * (attempt + 1))
                     
@@ -188,12 +206,10 @@ with tab2:
                     for fid in zip_ids:
                         for attempt in range(3):
                             try:
-                                # Get metadata for filename
                                 active_service = drive_service if attempt == 0 else create_drive_service()
                                 f_meta = active_service.files().get(fileId=fid, fields="name").execute()
                                 file_name = f_meta.get("name", f"wedding_memory_{fid}.jpg")
 
-                                # Use requests directly to avoid httplib2 redirect errors on video/large files
                                 download_url = f"https://www.googleapis.com/drive/v3/files/{fid}?alt=media"
                                 res = requests.get(download_url, headers=headers, timeout=120)
                                 

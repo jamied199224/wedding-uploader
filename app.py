@@ -96,7 +96,7 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
 
 drive_service = get_google_services()
 
-# --- HANDLE QUERY PARAMS (Delete & Like actions) ---
+# --- HANDLE QUERY PARAMS (Delete & Like/Unlike actions) ---
 params = st.query_params
 
 if "delete_id" in params and drive_service:
@@ -113,24 +113,33 @@ if "delete_id" in params and drive_service:
 
 if "like_id" in params and drive_service:
     like_id = params["like_id"]
+    action = params.get("action", "like")
     try:
         f_item = drive_service.files().get(fileId=like_id, fields="properties").execute()
         current_props = f_item.get("properties") or {}
         current_likes = int(current_props.get("likes", "0"))
-        current_props["likes"] = str(current_likes + 1)
         
+        if action == "like":
+            current_props["likes"] = str(current_likes + 1)
+        elif action == "unlike":
+            current_props["likes"] = str(max(0, current_likes - 1))
+            
         drive_service.files().update(
             fileId=like_id,
             body={"properties": current_props}
         ).execute()
     except Exception as e:
         st.error(f"Like update failed: {e}")
-    del st.query_params["like_id"]
+    
+    if "like_id" in st.query_params:
+        del st.query_params["like_id"]
+    if "action" in st.query_params:
+        del st.query_params["action"]
     st.rerun()
 
 st.title("💍 Jamie & Millie's Wedding Album")
 st.write("Welcome! Share your favorite moments and browse live memories below.")
-st.caption("✨ Tap to open, Double tap to like")
+st.caption("✨ Tap to open, Double tap to like / unlike")
 
 tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
@@ -318,7 +327,7 @@ with tab2:
                     html_items.append(f'''
                     <div class="grid-card" id="card-{fid}">
                         <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount(event)" />
-                        <button class="like-btn" id="like-btn-{fid}" title="Like memory" onclick="likeItem(event, \'{fid}\')">
+                        <button class="like-btn" id="like-btn-{fid}" title="Like memory" onclick="toggleLike(event, \'{fid}\')">
                             ❤️ <span id="like-count-{fid}">{likes_count}</span>
                         </button>
                         {delete_html}
@@ -430,7 +439,7 @@ with tab2:
                     .like-btn.liked {{
                         background: rgba(225, 29, 72, 0.9);
                         border-color: #ff4d6d;
-                        transform: translateX(-50%) scale(1.15);
+                        transform: translateX(-50%) scale(1.1);
                     }}
 
                     @keyframes heartBurst {{
@@ -508,36 +517,75 @@ with tab2:
                         let clickTimers = {{}};
                         let tapCounts = {{}};
 
-                        function triggerHeartAnimation(fid) {{
+                        function getLikedItems() {{
+                            try {{
+                                return JSON.parse(localStorage.getItem('liked_wedding_photos') || '[]');
+                            }} catch(e) {{
+                                return [];
+                            }}
+                        }}
+
+                        function setLikedItems(items) {{
+                            try {{
+                                localStorage.setItem('liked_wedding_photos', JSON.stringify(items));
+                            }} catch(e) {{}}
+                        }}
+
+                        function isItemLiked(fid) {{
+                            return getLikedItems().includes(fid);
+                        }}
+
+                        document.addEventListener('DOMContentLoaded', () => {{
+                            const liked = getLikedItems();
+                            liked.forEach(fid => {{
+                                const btn = document.getElementById('like-btn-' + fid);
+                                if (btn) btn.classList.add('liked');
+                            }});
+                        }});
+
+                        function toggleLike(e, fid) {{
+                            if (e) e.stopPropagation();
+
                             const card = document.getElementById('card-' + fid);
                             const countSpan = document.getElementById('like-count-' + fid);
                             const likeBtn = document.getElementById('like-btn-' + fid);
 
-                            if (card) {{
-                                const burst = document.createElement('div');
-                                burst.className = 'pop-heart';
-                                burst.innerText = '❤️';
-                                card.appendChild(burst);
-                                setTimeout(() => burst.remove(), 650);
-                            }}
+                            let likedList = getLikedItems();
+                            const alreadyLiked = likedList.includes(fid);
+                            let action = "like";
 
-                            if (likeBtn) {{
-                                likeBtn.classList.add('liked');
-                            }}
+                            if (!alreadyLiked) {{
+                                likedList.push(fid);
+                                setLikedItems(likedList);
+                                action = "like";
 
-                            if (countSpan) {{
-                                const cur = parseInt(countSpan.innerText || '0');
-                                countSpan.innerText = cur + 1;
+                                if (card) {{
+                                    const burst = document.createElement('div');
+                                    burst.className = 'pop-heart';
+                                    burst.innerText = '❤️';
+                                    card.appendChild(burst);
+                                    setTimeout(() => burst.remove(), 650);
+                                }}
+                                if (likeBtn) likeBtn.classList.add('liked');
+                                if (countSpan) {{
+                                    const cur = parseInt(countSpan.innerText || '0');
+                                    countSpan.innerText = cur + 1;
+                                }}
+                            }} else {{
+                                likedList = likedList.filter(id => id !== fid);
+                                setLikedItems(likedList);
+                                action = "unlike";
+
+                                if (likeBtn) likeBtn.classList.remove('liked');
+                                if (countSpan) {{
+                                    const cur = parseInt(countSpan.innerText || '0');
+                                    countSpan.innerText = Math.max(0, cur - 1);
+                                }}
                             }}
 
                             setTimeout(() => {{
-                                window.parent.location.search = '?like_id=' + fid;
+                                window.parent.location.search = '?like_id=' + fid + '&action=' + action;
                             }}, 300);
-                        }}
-
-                        function likeItem(e, fid) {{
-                            if (e) e.stopPropagation();
-                            triggerHeartAnimation(fid);
                         }}
 
                         function handleCardClick(e, fid, fullImg, previewUrl, isVideo) {{
@@ -553,7 +601,7 @@ with tab2:
                             }} else if (tapCounts[fid] === 2) {{
                                 clearTimeout(clickTimers[fid]);
                                 tapCounts[fid] = 0;
-                                triggerHeartAnimation(fid);
+                                toggleLike(null, fid);
                             }}
                         }}
 

@@ -61,7 +61,6 @@ st.markdown("""
         padding-right: 0.5rem !important;
         max-width: 100% !important;
     }
-    /* Pure CSS Grid: exactly 3 columns, perfectly fitting mobile screens with zero overflow */
     .google-photos-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -93,7 +92,6 @@ st.markdown("""
         color: white;
         font-size: 12px;
     }
-    /* Top-left selection overlay button */
     .select-overlay {
         position: absolute;
         top: 4px;
@@ -115,7 +113,6 @@ st.markdown("""
         background: #1a73e8;
         border-color: #1a73e8;
     }
-    /* Top-right delete overlay button */
     .delete-overlay {
         position: absolute;
         top: 4px;
@@ -133,7 +130,6 @@ st.markdown("""
         text-decoration: none;
         z-index: 10;
     }
-    /* Clickable area for viewing full image */
     .view-link {
         position: absolute;
         top: 0;
@@ -256,7 +252,7 @@ with tab2:
                         raise net_err
                     time.sleep(1)
             
-            files = results.get('files', []) if files else []
+            files = results.get('files', []) if results else []
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")

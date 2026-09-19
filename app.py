@@ -5,6 +5,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 import datetime
+import json
 
 st.set_page_config(page_title="Miljam's Wedding Upload", page_icon="💍", layout="centered")
 
@@ -13,7 +14,8 @@ def init_connections():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    creds_dict = dict(st.secrets["gcp_service_account"])
+    # Loads the entire JSON key securely as a single text block
+    creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS_JSON"])
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     gc = gspread.authorize(creds)
     drive_service = build('drive', 'v3', credentials=creds)
@@ -35,8 +37,8 @@ if uploaded_files and st.button("Upload Memories"):
         gc, drive_service = init_connections()
         folder_id = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl" # Your Drive Folder ID
         
-        # Change "Your_Google_Sheet_Name" to your actual Google Sheet name!
-        sheet = gc.open("1qCaENpLHD9APb-DZ9pgyalpp37xNrUeJt4lps5b1IUo").sheet1 
+        # Make sure to replace with your actual Google Sheet name!
+        sheet = gc.open("Your_Google_Sheet_Name").sheet1 
 
     progress_bar = st.progress(0)
     status_text = st.empty()

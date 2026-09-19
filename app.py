@@ -21,16 +21,26 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
 
-# --- CUSTOM CSS: COMPACT 3-COLUMN GOOGLE PHOTOS GRID ---
+# --- CUSTOM CSS: COMPACT 3-COLUMN NO-OVERFLOW MOBILE GRID ---
 st.markdown("""
 <style>
+    /* Prevent horizontal page overflow on mobile */
+    .main .block-container {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+        max-width: 100% !important;
+    }
     [data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
         flex-wrap: nowrap !important;
-        gap: 4px !important;
+        gap: 3px !important;
+        width: 100% !important;
+        margin: 0 !important;
     }
     [data-testid="column"] {
-        width: 33.333% !important;
-        flex: 1 1 33.333% !important;
+        flex: 0 0 33.333% !important;
+        max-width: 33.333% !important;
         min-width: 0 !important;
         padding: 1px !important;
     }
@@ -40,7 +50,8 @@ st.markdown("""
         border-radius: 3px;
         overflow: hidden;
         aspect-ratio: 1 / 1;
-        margin-bottom: 1px;
+        margin-bottom: 2px;
+        width: 100%;
     }
     .photo-card img {
         width: 100%;
@@ -56,14 +67,13 @@ st.markdown("""
         height: 100%;
         background: #222;
         color: white;
-        font-size: 14px;
+        font-size: 12px;
         border-radius: 3px;
     }
-    /* Reduce spacing for checkboxes and buttons to keep grid tight */
     .stCheckbox {
-        font-size: 11px !important;
-        margin-top: -4px !important;
-        margin-bottom: 4px !important;
+        font-size: 10px !important;
+        margin-top: -6px !important;
+        margin-bottom: 2px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -235,7 +245,7 @@ with tab2:
                                 is_mine = file_id in st.session_state.my_uploads
                                 
                                 if 'image' in mime_type and thumb_link:
-                                    img_src = thumb_link.replace('=s220', '=s400') # Smaller thumbnail size for speed and compact look
+                                    img_src = thumb_link.replace('=s220', '=s400')
                                     thumbnail_html = f'''
                                     <div class="photo-card">
                                         <a href="{web_link}" target="_blank">

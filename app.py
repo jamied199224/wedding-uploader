@@ -13,10 +13,18 @@ def init_connections():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    # Streamlit natively reads the [GOOGLE_CREDENTIALS_JSON] table as a dictionary
+    
     creds_dict = dict(st.secrets["GOOGLE_CREDENTIALS_JSON"])
+    
+    # Thoroughly sanitize the private key to fix any hidden editor/newline issues
     if "private_key" in creds_dict:
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        private_key = creds_dict["private_key"]
+        # Normalize carriage returns and strip leading/trailing whitespace
+        private_key = private_key.replace("\r\n", "\n").strip()
+        # If literal escaped \n somehow got in there, turn them into real newlines
+        if "\\n" in private_key and "\n" not in private_key:
+            private_key = private_key.replace("\\n", "\n")
+        creds_dict["private_key"] = private_key
         
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     gc = gspread.authorize(creds)

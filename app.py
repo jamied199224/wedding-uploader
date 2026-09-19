@@ -1,14 +1,15 @@
 import streamlit as st
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 import io
+from PIL import Image
 
 # Page configuration
 st.set_page_config(
     page_title="Jamie & Millie's Wedding Media Uploader",
     page_icon="💍",
-    layout="centered"
+    layout="wide"
 )
 
 # --- TARGET GOOGLE DRIVE FOLDER ID ---
@@ -16,12 +17,11 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
 # --- INITIALIZE SESSION STATE FOR DEVICE TRACKING ---
 if 'my_uploads' not in st.session_state:
-    st.session_state.my_uploads = []  # Tracks file IDs uploaded by *this specific device session*
+    st.session_state.my_uploads = []
 
 # --- PERSONAL TOUCH: PHOTO & TITLE ---
-# st.image("millie_and_jamie.jpg", width=300) 
 st.title("💍 Jamie & Millie's Wedding Album")
-st.write("Welcome! Please share your favorite photos and videos from our special day with us, and manage your uploads.")
+st.write("Welcome! Share your favorite moments and browse the live gallery below.")
 
 # --- GOOGLE API AUTHENTICATION ---
 @st.cache_resource
@@ -43,12 +43,28 @@ def get_google_services():
 
 drive_service, sheets_service = get_google_services()
 
-# --- TAB LAYOUT: UPLOAD VS. GALLERY ---
-tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Guest Gallery & Management"])
+# --- CACHED THUMBNAIL LOADER ---
+@st.cache_data(show_spinner=False)
+def load_thumbnail(file_id):
+    try:
+        request = drive_service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+        img = Image.open(fh)
+        img.thumbnail((300, 300))
+        return img
+    except Exception:
+        return None
+
+# --- TAB LAYOUT ---
+tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Interactive Gallery"])
 
 with tab1:
     st.header("Upload Photos & Videos")
-    
     uploaded_files = st.file_uploader(
         "Choose photos or videos", 
         type=["jpg", "jpeg", "png", "mp4", "mov"],
@@ -66,10 +82,8 @@ with tab1:
                 status_text = st.empty()
                 
                 success_count = 0
-                failed_files = []
-                
                 for index, uploaded_file in enumerate(uploaded_files):
-                    status_text.text(f"Uploading file {index + 1} of {total_files}: {uploaded_file.name}...")
+                    status_text.text(f"Uploading {index + 1} of {total_files}: {uploaded_file.name}...")
                     try:
                         file_metadata = {
                             'name': f"{guest_name or 'Guest'}_{uploaded_file.name}",
@@ -80,45 +94,35 @@ with tab1:
                             mimetype=uploaded_file.type,
                             resumable=True
                         )
-
                         file = drive_service.files().create(
                             body=file_metadata,
                             media_body=media,
-                            fields='id, webViewLink'
+                            fields='id'
                         ).execute()
                         
                         file_id = file.get('id')
-                        # Track this file ID so *this device* can manage/delete it later
                         if file_id not in st.session_state.my_uploads:
                             st.session_state.my_uploads.append(file_id)
                             
                         success_count += 1
                     except Exception as e:
-                        failed_files.append((uploaded_file.name, str(e)))
+                        st.error(f"Failed to upload {uploaded_file.name}: {e}")
                     
                     progress_bar.progress((index + 1) / total_files)
                 
                 status_text.empty()
                 progress_bar.empty()
-                
-                if success_count > 0:
-                    st.success(f"Thank you! Successfully uploaded {success_count} of {total_files} memories.")
-                
-                if failed_files:
-                    st.warning(f"Failed to upload {len(failed_files)} file(s). Try a smaller batch.")
-                    for fname, err in failed_files:
-                        st.text(f"- {fname}: {err}")
+                st.success(f"Successfully uploaded {success_count} of {total_files} memories!")
 
 with tab2:
-    st.header("Wedding Gallery & Device Management")
-    st.write("Browse memories shared by everyone. You can multi-select files *you* uploaded from this device to delete or view.")
+    st.header("Wedding Gallery")
     
     if drive_service:
         try:
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
             results = drive_service.files().list(
                 q=query,
-                pageSize=20,
+                pageSize=30,
                 fields="files(id, name, webViewLink, mimeType)",
                 orderBy="createdTime desc"
             ).execute()
@@ -127,48 +131,46 @@ with tab2:
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                # Multi-select action container for device owner's files
-                my_device_files = [f for f in files if f['id'] in st.session_state.my_uploads]
+                st.write("Browse through memories. Click **Download** to save an item, or click **❌ Delete** on your own uploads to remove them.")
                 
-                if my_device_files:
-                    st.subheader("🗑️ Manage Your Device Uploads")
-                    st.write("Select from the files you've uploaded during this session:")
+                # Grid layout (3 columns)
+                cols = st.columns(3)
+                for idx, file in enumerate(files):
+                    col = cols[idx % 3]
+                    file_id = file['id']
+                    file_name = file.get('name', 'Memory')
+                    mime_type = file.get('mimeType', '')
+                    is_mine = file_id in st.session_state.my_uploads
                     
-                    selected_to_delete = []
-                    for file in my_device_files:
-                        if st.checkbox(f"Select to delete: {file.get('name')}", key=f"del_{file['id']}"):
-                            selected_to_delete.append(file['id'])
-                    
-                    if selected_to_delete:
-                        if st.button("Delete Selected From Drive"):
-                            with st.spinner("Removing selected files..."):
-                                for file_id in selected_to_delete:
+                    with col:
+                        # Card header with optional delete button for user's own uploads
+                        header_cols = st.columns([0.8, 0.2])
+                        with header_cols[0]:
+                            st.markdown(f"**{file_name[:20]}...**" if len(file_name) > 20 else f"**{file_name}**")
+                        with header_cols[1]:
+                            if is_mine:
+                                if st.button("❌", key=f"del_{file_id}", help="Delete your upload"):
                                     try:
                                         drive_service.files().delete(fileId=file_id).execute()
                                         st.session_state.my_uploads.remove(file_id)
+                                        st.success("Deleted!")
+                                        st.rerun()
                                     except Exception as e:
-                                        st.error(f"Could not delete file: {e}")
-                                st.success("Selected files removed successfully!")
-                                st.rerun()
-                    st.divider()
-
-                st.subheader("All Guest Memories")
-                cols = st.columns(2)
-                for idx, file in enumerate(files):
-                    col = cols[idx % 2]
-                    with col:
-                        file_name = file.get('name', 'Memory')
-                        mime_type = file.get('mimeType', '')
-                        is_mine = file['id'] in st.session_state.my_uploads
+                                        st.error(f"Error: {e}")
                         
-                        st.write(f"**{file_name}** {'*(Your Upload)*' if is_mine else ''}")
-                        
+                        # Thumbnail or video badge display
                         if 'image' in mime_type:
-                            st.info("📷 Photo File")
-                        elif 'video' in mime_type:
+                            thumb = load_thumbnail(file_id)
+                            if thumb:
+                                st.image(thumb, use_container_width=True)
+                            else:
+                                st.info("📷 Image File")
+                        else:
                             st.info("🎥 Video File")
                         
-                        st.markdown(f"[Open / Download]({file.get('webViewLink')})", unsafe_allow_html=True)
+                        # Direct download / view link
+                        st.markdown(f"[📥 Download / Open]({file.get('webViewLink')})", unsafe_allow_html=True)
                         st.divider()
+
         except Exception as e:
             st.error(f"Could not load gallery: {e}")

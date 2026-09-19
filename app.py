@@ -160,6 +160,30 @@ def update_like_in_sheet(sheets_service, spreadsheet_id, file_id, delta):
         st.error(f"Error updating sheet: {e}")
         return None
 
+def remove_file_from_sheet(sheets_service, spreadsheet_id, file_id):
+    """Remove a file's record from the Google Sheet when deleted."""
+    try:
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range="A:B"
+        ).execute()
+        rows = result.get('values', [])
+        new_rows = [r for r in rows if len(r) > 0 and r[0] != file_id]
+        sheets_service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range="A:Z"
+        ).execute()
+        if new_rows:
+            body = {'values': new_rows}
+            sheets_service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range="A1",
+                valueInputOption="RAW",
+                body=body
+            ).execute()
+    except Exception as e:
+        pass
+
 def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
     """Upload files reliably using resumable requests."""
     creds = get_credentials()
@@ -199,42 +223,8 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
 drive_service, sheets_service = get_google_services()
 spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, TARGET_FOLDER_ID) if (drive_service and sheets_service) else None
 
-# --- HANDLE QUERY PARAMS (Delete & Like actions) ---
-params = st.query_params
-del_id = params.get("delete_id")
-like_id = params.get("like_id")
-
-if del_id and drive_service:
-    try:
-        drive_service.files().delete(fileId=del_id).execute()
-        if spreadsheet_id and sheets_service:
-            result = sheets_service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range="A:B").execute()
-            rows = result.get('values', [])
-            new_rows = [r for r in rows if len(r) > 0 and r[0] != del_id]
-            sheets_service.spreadsheets().values().clear(spreadsheetId=spreadsheet_id, range="A:Z").execute()
-            if new_rows:
-                sheets_service.spreadsheets().values().update(
-                    spreadsheetId=spreadsheet_id, range="A1", valueInputOption="RAW", body={'values': new_rows}
-                ).execute()
-        st.success("Memory deleted!")
-    except Exception as e:
-        st.error(f"Delete failed: {e}")
-    st.query_params.clear()
-    st.rerun()
-
-if like_id and sheets_service and spreadsheet_id:
-    action = params.get("action", "like")
-    delta = 1 if action == "like" else -1
-    try:
-        update_like_in_sheet(sheets_service, spreadsheet_id, like_id, delta)
-    except Exception as e:
-        st.error(f"Like update failed: {e}")
-    st.query_params.clear()
-    st.rerun()
-
 st.title("💍 Jamie & Millie's Wedding Album")
 st.write("Welcome! Share your favorite memories and browse the live gallery below.")
-st.caption("✨ Tap photo to open | Tap heart to like | Double tap photo to like")
 
 tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
@@ -267,7 +257,6 @@ with tab1:
                 failed_files = []
                 
                 clean_guest_name = guest_name.strip() if guest_name and guest_name.strip() else "Guest"
-                newly_uploaded_ids = []
                 
                 for index, uploaded_file in enumerate(uploaded_files):
                     file_raw = uploaded_file.getvalue()
@@ -288,10 +277,8 @@ with tab1:
                                 mime_type, 
                                 TARGET_FOLDER_ID
                             )
-                            if file_id:
-                                newly_uploaded_ids.append(file_id)
-                                if spreadsheet_id and sheets_service:
-                                    update_like_in_sheet(sheets_service, spreadsheet_id, file_id, 0)
+                            if file_id and spreadsheet_id and sheets_service:
+                                update_like_in_sheet(sheets_service, spreadsheet_id, file_id, 0)
                             uploaded_successfully = True
                             success_count += 1
                             break
@@ -312,527 +299,85 @@ with tab1:
                         st.write(f"- **{fname}**: {err}")
                 
                 if success_count > 0:
-                    st.session_state.new_uploads = newly_uploaded_ids
                     st.session_state.upload_msg = f"Successfully uploaded {success_count} of {total_files} memories!"
                     st.session_state.uploader_key += 1
                     st.rerun()
 
 with tab2:
     st.header("Wedding Gallery")
-    
-    # --- HANDLE ZIP ARCHIVE CREATION ---
-    zip_ids_param = params.get("zip_ids")
-    if zip_ids_param and drive_service:
-        zip_ids = zip_ids_param.split(",")
-        with st.spinner(f"Packaging {len(zip_ids)} memories into a ZIP folder..."):
-            try:
-                zip_buffer = io.BytesIO()
-                creds = get_credentials()
-                headers = {"Authorization": f"Bearer {creds.token}"}
-
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for fid in zip_ids:
-                        for attempt in range(3):
-                            try:
-                                active_service = drive_service if attempt == 0 else create_drive_service()
-                                f_meta = active_service.files().get(fileId=fid, fields="name").execute()
-                                file_name = f_meta.get("name", f"wedding_memory_{fid}.jpg")
-
-                                download_url = f"https://www.googleapis.com/drive/v3/files/{fid}?alt=media"
-                                res = requests.get(download_url, headers=headers, timeout=120)
-                                
-                                if res.status_code == 200:
-                                    zf.writestr(file_name, res.content)
-                                    break
-                                else:
-                                    raise Exception(f"HTTP {res.status_code}: {res.text[:100]}")
-                            except Exception as dl_err:
-                                if attempt == 2:
-                                    st.warning(f"Could not include file {fid} in ZIP: {dl_err}")
-                                time.sleep(1)
-                
-                zip_buffer.seek(0)
-                st.success("Your ZIP folder is ready!")
-                
-                col_z1, col_z2 = st.columns([0.6, 0.4])
-                with col_z1:
-                    st.download_button(
-                        label="💾 Save ZIP Folder",
-                        data=zip_buffer,
-                        file_name="wedding_memories.zip",
-                        mime="application/zip",
-                        type="primary"
-                    )
-                with col_z2:
-                    if st.button("Close / Done"):
-                        st.query_params.clear()
-                        st.rerun()
-                st.markdown("---")
-            except Exception as e:
-                st.error(f"Error creating ZIP: {e}")
 
     if drive_service and sheets_service:
         try:
             query = f"'{TARGET_FOLDER_ID}' in parents and name != 'wedding_likes_db' and trashed=false"
-            results = None
+            results = drive_service.files().list(
+                q=query,
+                pageSize=100,
+                fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
+                orderBy="createdTime desc"
+            ).execute()
             
-            for attempt in range(3):
-                try:
-                    active_service = drive_service if attempt == 0 else create_drive_service()
-                    results = active_service.files().list(
-                        q=query,
-                        pageSize=100,
-                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
-                        orderBy="createdTime desc"
-                    ).execute()
-                    break
-                except (ssl.SSLError, socket.error, Exception) as net_err:
-                    if attempt == 2:
-                        raise net_err
-                    time.sleep(1)
-            
-            files = results.get('files', []) if results else []
+            files = results.get('files', [])
             likes_dict = load_likes_from_sheet(sheets_service, spreadsheet_id)
-
-            recent_uploads_json = "[]"
-            if "new_uploads" in st.session_state:
-                recent_uploads_json = json.dumps(st.session_state.new_uploads)
-                del st.session_state.new_uploads
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                html_items = []
-                for file in files:
-                    fid = file.get('id')
-                    raw_title = file.get('name', '')
-                    mime = file.get('mimeType', '')
-                    thumb_small = file.get('thumbnailLink', '').replace('=s220', '=s400')
-                    full_image = file.get('thumbnailLink', '').replace('=s220', '=s1600')
-                    preview_url = f"https://drive.google.com/file/d/{fid}/preview"
-                    is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
+                # Native responsive grid using Streamlit columns (3 per row)
+                cols_per_row = 3
+                for i in range(0, len(files), cols_per_row):
+                    row_files = files[i:i+cols_per_row]
+                    cols = st.columns(cols_per_row)
                     
-                    likes_count = int(likes_dict.get(fid, 0))
-                    
-                    if '_' in raw_title:
-                        uploader_name = raw_title.split('_', 1)[0].strip()
-                    else:
-                        uploader_name = 'Guest'
-                    if not uploader_name:
-                        uploader_name = 'Guest'
-                    
-                    if not is_video and thumb_small:
-                        media_content = f'<img src="{thumb_small}" alt="Photo" />'
-                    else:
-                        media_content = '<div class="video-label">▶ Video</div>'
-                        
-                    html_items.append(f'''
-                    <div class="grid-card" id="card-{fid}" data-fid="{fid}">
-                        <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount(event)" />
-                        <button class="like-btn" id="like-btn-{fid}" title="Like memory" onclick="toggleLike(event, \'{fid}\')">
-                            ❤️ <span id="like-count-{fid}">{likes_count}</span>
-                        </button>
-                        <button class="delete-btn" id="del-btn-{fid}" title="Delete Photo" onclick="deleteItem(event, \'{fid}\')" style="display:none;">✕</button>
-                        <div class="card-link" onclick="handleCardClick(event, \'{fid}\', \'{full_image}\', \'{preview_url}\', {'true' if is_video else 'false'})">
-                            {media_content}
-                        </div>
-                        <div class="uploader-tag">Added by {uploader_name}</div>
-                    </div>
-                    ''')
-
-                gallery_html = f'''
-                <!DOCTYPE html>
-                <html>
-                <head>
-                <style>
-                    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-                    body {{ background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-                    
-                    .gallery-grid {{
-                        display: grid !important;
-                        grid-template-columns: repeat(3, 1fr) !important;
-                        gap: 4px !important;
-                        width: 100% !important;
-                    }}
-                    
-                    .grid-card {{
-                        position: relative;
-                        width: 100%;
-                        aspect-ratio: 1 / 1;
-                        background: #111;
-                        border-radius: 4px;
-                        overflow: hidden;
-                        cursor: pointer;
-                        user-select: none;
-                    }}
-                    
-                    .card-link {{
-                        display: block;
-                        width: 100%;
-                        height: 100%;
-                    }}
-                    
-                    .grid-card img {{
-                        width: 100%;
-                        height: 100%;
-                        object-fit: cover;
-                        display: block;
-                    }}
-                    
-                    .video-label {{
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        height: 100%;
-                        color: #fff;
-                        font-size: 11px;
-                        background: #222;
-                    }}
-                    
-                    .uploader-tag {{
-                        position: absolute;
-                        bottom: 0;
-                        left: 0;
-                        right: 0;
-                        background: rgba(0, 0, 0, 0.72);
-                        color: #ffffff;
-                        font-size: 10px;
-                        padding: 3px 4px;
-                        text-align: center;
-                        white-space: nowrap;
-                        overflow: hidden;
-                        text-overflow: ellipsis;
-                        pointer-events: none;
-                        z-index: 5;
-                    }}
-                    
-                    .select-check {{
-                        position: absolute;
-                        top: 6px;
-                        left: 6px;
-                        z-index: 10;
-                        width: 22px;
-                        height: 22px;
-                        accent-color: #1a73e8;
-                        cursor: pointer;
-                    }}
-
-                    .like-btn {{
-                        position: absolute;
-                        top: 6px;
-                        left: 50%;
-                        transform: translateX(-50%);
-                        z-index: 10;
-                        background: rgba(0, 0, 0, 0.65);
-                        border: 1px solid rgba(255, 255, 255, 0.8);
-                        border-radius: 12px;
-                        color: #ffffff;
-                        font-size: 11px;
-                        padding: 2px 7px;
-                        cursor: pointer;
-                        display: flex;
-                        align-items: center;
-                        gap: 3px;
-                        line-height: 1;
-                        font-family: inherit;
-                        transition: transform 0.15s ease, background 0.15s ease;
-                    }}
-                    
-                    .like-btn.liked {{
-                        background: rgba(225, 29, 72, 0.9);
-                        border-color: #ff4d6d;
-                        transform: translateX(-50%) scale(1.1);
-                    }}
-
-                    @keyframes heartBurst {{
-                        0% {{ opacity: 1; transform: translate(-50%, -50%) scale(0.3); }}
-                        50% {{ opacity: 1; transform: translate(-50%, -80%) scale(1.5); }}
-                        100% {{ opacity: 0; transform: translate(-50%, -120%) scale(2.0); }}
-                    }}
-
-                    .pop-heart {{
-                        position: absolute;
-                        top: 50%;
-                        left: 50%;
-                        font-size: 42px;
-                        pointer-events: none;
-                        z-index: 25;
-                        animation: heartBurst 0.65s cubic-bezier(0.17, 0.89, 0.32, 1.28) forwards;
-                    }}
-
-                    .delete-btn {{
-                        position: absolute;
-                        top: 6px;
-                        right: 6px;
-                        z-index: 10;
-                        width: 22px;
-                        height: 22px;
-                        border-radius: 50%;
-                        background: rgba(0, 0, 0, 0.65);
-                        border: 1px solid rgba(255, 255, 255, 0.8);
-                        color: white;
-                        font-size: 11px;
-                        cursor: pointer;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                    }}
-                    
-                    .action-bar {{
-                        margin-top: 12px;
-                        padding: 10px 14px;
-                        background: #1e1e1e;
-                        border-radius: 8px;
-                        display: flex;
-                        align-items: center;
-                        justify-content: space-between;
-                        color: #fff;
-                    }}
-                    
-                    .dl-btn {{
-                        background: #1a73e8;
-                        color: #fff;
-                        border: none;
-                        padding: 8px 16px;
-                        border-radius: 6px;
-                        font-weight: bold;
-                        cursor: pointer;
-                    }}
-                    .dl-btn:disabled {{
-                        background: #444;
-                        color: #888;
-                        cursor: not-allowed;
-                    }}
-                </style>
-                </head>
-                <body>
-                    <div class="gallery-grid">
-                        {"".join(html_items)}
-                    </div>
-                    
-                    <div class="action-bar">
-                        <span id="count-text">0 items selected</span>
-                        <button id="dl-btn" class="dl-btn" onclick="prepareZipDownload()" disabled>📦 Download ZIP</button>
-                    </div>
-
-                    <script>
-                        let clickTimers = {{}};
-                        let tapCounts = {{}};
-
-                        function getMyUploads() {{
-                            try {{
-                                return JSON.parse(localStorage.getItem('my_wedding_uploads') || '[]');
-                            }} catch(e) {{
-                                return [];
-                            }}
-                        }}
-
-                        function getLikedItems() {{
-                            try {{
-                                return JSON.parse(localStorage.getItem('liked_wedding_photos') || '[]');
-                            }} catch(e) {{
-                                return [];
-                            }}
-                        }}
-
-                        function setLikedItems(items) {{
-                            try {{
-                                localStorage.setItem('liked_wedding_photos', JSON.stringify(items));
-                            }} catch(e) {{}}
-                        }}
-
-                        function initApp() {{
-                            // 1. Handle uploads & delete buttons persistence
-                            let mine = getMyUploads();
-                            const newlyUploaded = {recent_uploads_json};
-                            if (newlyUploaded && newlyUploaded.length > 0) {{
-                                newlyUploaded.forEach(id => {{
-                                    if (!mine.includes(id)) mine.push(id);
-                                }});
-                                localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
-                            }}
-
-                            mine.forEach(fid => {{
-                                const delBtn = document.getElementById('del-btn-' + fid);
-                                if (delBtn) delBtn.style.display = 'flex';
-                            }});
-
-                            // 2. Sync liked hearts state from localStorage
-                            const liked = getLikedItems();
-                            liked.forEach(fid => {{
-                                const btn = document.getElementById('like-btn-' + fid);
-                                if (btn) btn.classList.add('liked');
-                            }});
-                        }}
-
-                        // Run immediately on script load (bypassing broken iframe DOMContentLoaded)
-                        initApp();
-
-                        function toggleLike(e, fid) {{
-                            if (e) e.stopPropagation();
-
-                            const card = document.getElementById('card-' + fid);
-                            const countSpan = document.getElementById('like-count-' + fid);
-                            const likeBtn = document.getElementById('like-btn-' + fid);
-
-                            let likedList = getLikedItems();
-                            const alreadyLiked = likedList.includes(fid);
-                            let action = "like";
-
-                            if (!alreadyLiked) {{
-                                likedList.push(fid);
-                                setLikedItems(likedList);
-                                action = "like";
-
-                                if (card) {{
-                                    const burst = document.createElement('div');
-                                    burst.className = 'pop-heart';
-                                    burst.innerText = '❤️';
-                                    card.appendChild(burst);
-                                    setTimeout(() => burst.remove(), 650);
-                                }}
-                                if (likeBtn) likeBtn.classList.add('liked');
-                                if (countSpan) {{
-                                    const cur = parseInt(countSpan.innerText || '0');
-                                    countSpan.innerText = cur + 1;
-                                }}
-                            }} else {{
-                                likedList = likedList.filter(id => id !== fid);
-                                setLikedItems(likedList);
-                                action = "unlike";
-
-                                if (likeBtn) likeBtn.classList.remove('liked');
-                                if (countSpan) {{
-                                    const cur = parseInt(countSpan.innerText || '0');
-                                    countSpan.innerText = Math.max(0, cur - 1);
-                                }}
-                            }}
-
-                            setTimeout(() => {{
-                                window.parent.location.search = '?like_id=' + fid + '&action=' + action + '&_t=' + Date.now();
-                            }}, 300);
-                        }}
-
-                        function handleCardClick(e, fid, fullImg, previewUrl, isVideo) {{
-                            if (e) e.stopPropagation();
+                    for col_idx, file in enumerate(row_files):
+                        with cols[col_idx]:
+                            fid = file.get('id')
+                            raw_title = file.get('name', '')
+                            mime = file.get('mimeType', '')
+                            thumb = file.get('thumbnailLink', '').replace('=s220', '=s600')
+                            is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
                             
-                            tapCounts[fid] = (tapCounts[fid] || 0) + 1;
-
-                            if (tapCounts[fid] === 1) {{
-                                clickTimers[fid] = setTimeout(() => {{
-                                    tapCounts[fid] = 0;
-                                    openModal(fullImg, previewUrl, isVideo);
-                                }}, 260);
-                            }} else if (tapCounts[fid] === 2) {{
-                                clearTimeout(clickTimers[fid]);
-                                tapCounts[fid] = 0;
-                                toggleLike(null, fid);
-                            }}
-                        }}
-
-                        function openModal(fullImg, previewUrl, isVideo) {{
-                            const parentWin = window.parent;
-                            const parentDoc = parentWin.document;
+                            likes_count = int(likes_dict.get(fid, 0))
                             
-                            parentWin.closeWeddingModal = function() {{
-                                const overlay = parentDoc.getElementById('global-wedding-lightbox');
-                                if (overlay) {{
-                                    overlay.style.display = 'none';
-                                    overlay.innerHTML = '';
-                                }}
-                            }};
-
-                            let overlay = parentDoc.getElementById('global-wedding-lightbox');
+                            uploader_name = raw_title.split('_', 1)[0].strip() if '_' in raw_title else 'Guest'
+                            if not uploader_name:
+                                uploader_name = 'Guest'
                             
-                            if (!overlay) {{
-                                overlay = parentDoc.createElement('div');
-                                overlay.id = 'global-wedding-lightbox';
-                                overlay.style.cssText = 'position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.88); z-index:9999999; display:none; justify-content:center; align-items:center;';
-                                parentDoc.body.appendChild(overlay);
-                            }}
-
-                            overlay.onclick = function(e) {{
-                                if (e.target === overlay) {{
-                                    parentWin.closeWeddingModal();
-                                }}
-                            }};
-
-                            overlay.innerHTML = '';
-
-                            const closeBtn = parentDoc.createElement('button');
-                            closeBtn.id = 'wedding-modal-close-btn';
-                            closeBtn.innerHTML = '✕';
-                            closeBtn.style.cssText = 'position:fixed; top:20px; right:20px; color:#ffffff; font-size:26px; font-weight:bold; cursor:pointer; background:rgba(20,20,20,0.85); border:2px solid #ffffff; border-radius:50%; width:46px; height:46px; display:flex; align-items:center; justify-content:center; z-index:10000000; box-shadow:0 4px 12px rgba(0,0,0,0.6); line-height:1; font-family:sans-serif;';
+                            st.caption(f"Added by **{uploader_name}**")
                             
-                            closeBtn.onclick = function(e) {{
-                                e.stopPropagation();
-                                parentWin.closeWeddingModal();
-                            }};
-
-                            const mediaContainer = parentDoc.createElement('div');
-                            mediaContainer.style.cssText = 'position:relative; max-width:85vw; max-height:85vh; display:flex; justify-content:center; align-items:center;';
-
-                            if (isVideo) {{
-                                const iframe = parentDoc.createElement('iframe');
-                                iframe.src = previewUrl;
-                                iframe.style.cssText = 'width:80vw; height:75vh; max-width:80vw; max-height:80vh; border:none; border-radius:8px; background:#000; box-shadow:0 8px 30px rgba(0,0,0,0.6);';
-                                iframe.allow = 'autoplay';
-                                mediaContainer.appendChild(iframe);
-                            }} else {{
-                                const img = parentDoc.createElement('img');
-                                img.src = fullImg;
-                                img.style.cssText = 'max-width:80vw; max-height:80vh; width:auto; height:auto; object-fit:contain; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.6);';
-                                mediaContainer.appendChild(img);
-                            }}
-
-                            overlay.appendChild(closeBtn);
-                            overlay.appendChild(mediaContainer);
-                            overlay.style.display = 'flex';
-
-                            parentWin.onkeydown = function(e) {{
-                                if (e.key === 'Escape') {{
-                                    parentWin.closeWeddingModal();
-                                }}
-                            }};
-                        }}
-
-                        function updateCount(e) {{
-                            if (e) e.stopPropagation();
-                            const checked = document.querySelectorAll('.select-check:checked');
-                            const countText = document.getElementById('count-text');
-                            const btn = document.getElementById('dl-btn');
-                            countText.innerText = checked.length + " item(s) selected";
-                            btn.disabled = checked.length === 0;
-                        }}
-
-                        function prepareZipDownload() {{
-                            const checked = document.querySelectorAll('.select-check:checked');
-                            const ids = [];
-                            checked.forEach(cb => {{
-                                ids.push(cb.getAttribute('data-id'));
-                            }});
-                            if (ids.length > 0) {{
-                                window.parent.location.search = '?zip_ids=' + ids.join(',') + '&_t=' + Date.now();
-                            }}
-                        }}
-
-                        function deleteItem(e, fid) {{
-                            if (e) e.stopPropagation();
-                            if (confirm("Delete this photo from the album?")) {{
-                                let mine = getMyUploads();
-                                mine = mine.filter(id => id !== fid);
-                                localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
-                                window.parent.location.search = '?delete_id=' + fid + '&_t=' + Date.now();
-                            }}
-                        }}
-                    </script>
-                </body>
-                </html>
-                '''
-                
-                grid_rows = (len(files) + 2) // 3
-                calculated_height = (grid_rows * 130) + 80
-                st.components.v1.html(gallery_html, height=calculated_height, scrolling=False)
+                            if not is_video and thumb:
+                                st.image(thumb, use_container_width=True)
+                            else:
+                                st.info("📹 Video file")
+                            
+                            # Native Action Buttons
+                            btn_col1, btn_col2 = st.columns(2)
+                            
+                            liked_key = f"liked_{fid}"
+                            if liked_key not in st.session_state:
+                                st.session_state[liked_key] = False
+                                
+                            with btn_col1:
+                                if st.button(f"❤️ {likes_count}", key=f"like_{fid}"):
+                                    if not st.session_state[liked_key]:
+                                        update_like_in_sheet(sheets_service, spreadsheet_id, fid, 1)
+                                        st.session_state[liked_key] = True
+                                    else:
+                                        update_like_in_sheet(sheets_service, spreadsheet_id, fid, -1)
+                                        st.session_state[liked_key] = False
+                                    st.rerun()
+                                    
+                            with btn_col2:
+                                if st.button("🗑️ Delete", key=f"delete_{fid}"):
+                                    try:
+                                        drive_service.files().delete(fileId=fid).execute()
+                                        remove_file_from_sheet(sheets_service, spreadsheet_id, fid)
+                                        st.success("Memory deleted!")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Delete failed: {e}")
+                                        
+                            st.markdown("---")
 
         except Exception as e:
+        # End of file update
             st.error(f"Google Drive Error: {e}")

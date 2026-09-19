@@ -22,23 +22,28 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- GOOGLE PHOTOS GRID STYLING ---
+# --- GOOGLE PHOTOS GRID CSS STYLING ---
 st.markdown("""
 <style>
-    /* Tighten spacing and create a clean Google Photos grid feel */
+    /* Remove default padding and create a seamless photo wall */
     [data-testid="column"] {
-        padding: 4px !important;
+        padding: 3px !important;
     }
-    /* Force square aspect ratio for images to match a photo grid */
     .stImage img {
-        border-radius: 6px !important;
+        border-radius: 4px !important;
         object-fit: cover !important;
         aspect-ratio: 1 / 1 !important;
         width: 100% !important;
     }
-    /* Reduce container padding for compactness */
-    [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"] {
-        gap: 0.5rem;
+    /* Compact spacing for buttons and text under photos */
+    .stButton button {
+        width: 100%;
+        padding: 2px 4px;
+        font-size: 12px;
+        border-radius: 4px;
+    }
+    div.row-widget.stButton {
+        margin-top: -5px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -265,7 +270,6 @@ if drive_service and sheets_service and not spreadsheet_id:
 
 st.title("💍 Jamie & Millie's Wedding Album")
 st.write("Welcome! Share your favorite memories and browse the live gallery below.")
-st.caption("✨ Select photos for ZIP download | Tap heart to like | Expand to view full size")
 
 tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
@@ -368,7 +372,7 @@ with tab2:
             else:
                 selected_for_zip = []
 
-                # Render 3-column Google Photos style grid
+                # Render seamless 3-column Google Photos style grid
                 cols_per_row = 3
                 rows = [files[i:i + cols_per_row] for i in range(0, len(files), cols_per_row)]
 
@@ -394,60 +398,61 @@ with tab2:
                             uploader_name = 'Guest'
 
                         with col_slots[idx]:
-                            with st.container(border=True):
-                                # Checkbox for ZIP download selection
-                                is_selected = st.checkbox("Select", key=f"chk_{fid}", label_visibility="collapsed")
-                                if is_selected:
-                                    selected_for_zip.append(fid)
+                            # Selection checkbox for ZIP download
+                            is_selected = st.checkbox("Select", key=f"chk_{fid}")
+                            if is_selected:
+                                selected_for_zip.append(fid)
 
-                                # Photo or Video thumbnail view
-                                if not is_video and thumb_small:
-                                    st.image(thumb_small, use_container_width=True)
-                                else:
-                                    st.markdown("🎥 **Video File**")
-                                    st.markdown(f"[Watch Preview]({preview_url})", unsafe_allow_html=True)
+                            # Media Display (Borderless square photo grid)
+                            if not is_video and thumb_small:
+                                st.image(thumb_small, use_container_width=True)
+                            else:
+                                st.markdown("🎥 **Video File**")
+                                st.markdown(f"[Watch Preview]({preview_url})", unsafe_allow_html=True)
 
-                                st.caption(f"Added by **{uploader_name}**")
+                            st.caption(f"Added by {uploader_name}")
 
-                                # Action buttons
-                                b_col1, b_col2, b_col3 = st.columns([1.2, 1, 1])
-                                
-                                # Like button
-                                with b_col1:
-                                    heart_label = f"❤️ {likes_count}"
-                                    if st.button(heart_label, key=f"like_{fid}", help="Like this memory"):
-                                        if fid in st.session_state.my_likes:
-                                            st.session_state.my_likes.remove(fid)
-                                            update_like_in_sheet(sheets_service, spreadsheet_id, file_id=fid, delta=-1)
-                                        else:
-                                            st.session_state.my_likes.add(fid)
-                                            update_like_in_sheet(sheets_service, spreadsheet_id, file_id=fid, delta=1)
-                                        st.rerun()
+                            # Action buttons layout underneath each photo
+                            b_col1, b_col2, b_col3 = st.columns([1.2, 1, 1])
+                            
+                            # Like Button
+                            with b_col1:
+                                heart_label = f"❤️ {likes_count}"
+                                if st.button(heart_label, key=f"like_{fid}"):
+                                    if fid in st.session_state.my_likes:
+                                        st.session_state.my_likes.remove(fid)
+                                        update_like_in_sheet(sheets_service, spreadsheet_id, file_id=fid, delta=-1)
+                                    else:
+                                        st.session_state.my_likes.add(fid)
+                                        update_like_in_sheet(sheets_service, spreadsheet_id, file_id=fid, delta=1)
+                                    st.rerun()
 
-                                # Full-size viewer modal
-                                with b_col2:
-                                    if not is_video:
-                                        if st.button("🔍 View", key=f"view_{fid}"):
-                                            @st.dialog("Memory Preview")
-                                            def show_modal():
-                                                st.image(full_image, use_container_width=True)
-                                                st.caption(f"Added by {uploader_name}")
-                                            show_modal()
+                            # View Modal Button
+                            with b_col2:
+                                if not is_video:
+                                    if st.button("🔍 View", key=f"view_{fid}"):
+                                        @st.dialog("Memory Preview")
+                                        def show_modal():
+                                            st.image(full_image, use_container_width=True)
+                                            st.caption(f"Added by {uploader_name}")
+                                        show_modal()
 
-                                # Delete button (for session owner)
-                                with b_col3:
-                                    if is_mine:
-                                        if st.button("🗑️", key=f"del_{fid}", help="Delete photo"):
-                                            try:
-                                                drive_service.files().delete(fileId=fid).execute()
-                                                if spreadsheet_id and sheets_service:
-                                                    remove_file_from_sheet(sheets_service, spreadsheet_id, fid)
-                                                if fid in st.session_state.my_uploads:
-                                                    st.session_state.my_uploads.remove(fid)
-                                                st.success("Deleted!")
-                                                st.rerun()
-                                            except Exception as e:
-                                                st.error(f"Delete failed: {e}")
+                            # Delete Button
+                            with b_col3:
+                                if is_mine:
+                                    if st.button("🗑️", key=f"del_{fid}"):
+                                        try:
+                                            drive_service.files().delete(fileId=fid).execute()
+                                            if spreadsheet_id and sheets_service:
+                                                remove_file_from_sheet(sheets_service, spreadsheet_id, fid)
+                                            if fid in st.session_state.my_uploads:
+                                                st.session_state.my_uploads.remove(fid)
+                                            st.success("Deleted!")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Delete failed: {e}")
+
+                            st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
                 # --- BATCH ZIP DOWNLOAD BAR ---
                 st.markdown("---")
@@ -480,7 +485,7 @@ with tab2:
                             except Exception as e:
                                 st.error(f"Error creating ZIP: {e}")
                 else:
-                    st.info("Check the box on any photo/video card above to select it for ZIP download.")
+                    st.info("Check the box above any photo to select it for your ZIP download batch.")
 
         except Exception as e:
             st.error(f"Google Drive Error: {e}")

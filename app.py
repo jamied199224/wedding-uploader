@@ -130,6 +130,7 @@ if "like_id" in params and drive_service:
 
 st.title("💍 Jamie & Millie's Wedding Album")
 st.write("Welcome! Share your favorite moments and browse live memories below.")
+st.caption("✨ Tap to open, Double tap to like")
 
 tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
@@ -432,7 +433,6 @@ with tab2:
                         transform: translateX(-50%) scale(1.15);
                     }}
 
-                    /* HEART POP ANIMATION ON TAP/CLICK */
                     @keyframes heartBurst {{
                         0% {{ opacity: 1; transform: translate(-50%, -50%) scale(0.3); }}
                         50% {{ opacity: 1; transform: translate(-50%, -80%) scale(1.5); }}

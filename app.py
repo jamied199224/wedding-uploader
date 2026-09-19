@@ -2,11 +2,15 @@ import streamlit as st
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+import httplib2
 import io
 import socket
 import ssl
 import time
 import zipfile
+
+# Prevent infinite socket hanging globally
+socket.setdefaulttimeout(120)
 
 st.set_page_config(
     page_title="Jamie & Millie's Wedding Album",
@@ -29,7 +33,9 @@ def get_google_services():
             client_secret=st.secrets["client_secret"],
             token_uri="https://oauth2.googleapis.com/token",
         )
-        drive_service = build('drive', 'v3', credentials=creds)
+        # Explicit timeout on httplib2 to stop upload freezes
+        http_auth = creds.authorize(httplib2.Http(timeout=120))
+        drive_service = build('drive', 'v3', http=http_auth)
         return drive_service
     except Exception as e:
         st.error(f"Failed to authenticate with Google: {e}")
@@ -81,7 +87,10 @@ with tab1:
                 failed_files = []
                 
                 for index, uploaded_file in enumerate(uploaded_files):
-                    status_text.text(f"Uploading {index + 1} of {total_files}: {uploaded_file.name} (0%)...")
+                    file_raw = uploaded_file.getvalue()
+                    file_size_mb = len(file_raw) / (1024 * 1024)
+                    
+                    status_text.text(f"Uploading {index + 1} of {total_files}: {uploaded_file.name} ({file_size_mb:.1f} MB)...")
                     uploaded_successfully = False
                     last_err = None
                     
@@ -92,12 +101,15 @@ with tab1:
                                 'parents': [TARGET_FOLDER_ID]
                             }
                             
-                            # Stream in 5MB chunks to handle large video files reliably
+                            # Use 2MB chunking for files > 5MB, standard upload for small images
+                            is_large = file_size_mb > 5
+                            chunk_size = 2 * 1024 * 1024 if is_large else -1
+                            
                             media = MediaIoBaseUpload(
-                                io.BytesIO(uploaded_file.getvalue()),
+                                io.BytesIO(file_raw),
                                 mimetype=uploaded_file.type or 'application/octet-stream',
-                                chunksize=5 * 1024 * 1024,
-                                resumable=True
+                                chunksize=chunk_size,
+                                resumable=is_large
                             )
                             
                             request = drive_service.files().create(
@@ -107,11 +119,14 @@ with tab1:
                             )
                             
                             response = None
-                            while response is None:
-                                status, response = request.next_chunk()
-                                if status:
-                                    pct = int(status.progress() * 100)
-                                    status_text.text(f"Uploading {index + 1}/{total_files}: {uploaded_file.name} ({pct}%)...")
+                            if is_large:
+                                while response is None:
+                                    status, response = request.next_chunk()
+                                    if status:
+                                        pct = int(status.progress() * 100)
+                                        status_text.text(f"Uploading {index + 1}/{total_files}: {uploaded_file.name} ({pct}%)...")
+                            else:
+                                response = request.execute()
 
                             file_id = response.get('id')
                             if file_id and file_id not in st.session_state.my_uploads:
@@ -119,9 +134,9 @@ with tab1:
                             uploaded_successfully = True
                             success_count += 1
                             break
-                        except (ssl.SSLError, socket.timeout, Exception) as e:
+                        except Exception as e:
                             last_err = e
-                            time.sleep(1)
+                            time.sleep(2)  # Wait 2 seconds before retry
                     
                     if not uploaded_successfully:
                         failed_files.append((uploaded_file.name, str(last_err)))
@@ -180,20 +195,12 @@ with tab2:
     if drive_service:
         try:
             query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
-            results = None
-            for attempt in range(3):
-                try:
-                    results = drive_service.files().list(
-                        q=query,
-                        pageSize=100,
-                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
-                        orderBy="createdTime desc"
-                    ).execute()
-                    break
-                except (ssl.SSLError, socket.timeout, Exception) as net_err:
-                    if attempt == 2:
-                        raise net_err
-                    time.sleep(1)
+            results = drive_service.files().list(
+                q=query,
+                pageSize=100,
+                fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
+                orderBy="createdTime desc"
+            ).execute()
             
             files = results.get('files', []) if results else []
 

@@ -119,40 +119,46 @@ with tab2:
                 cols = st.columns(3)
                 for idx, file in enumerate(files):
                     col = cols[idx % 3]
-                    file_id = file['id']
-                    file_name = file.get('name', 'Memory')
-                    mime_type = file.get('mimeType', '')
-                    thumb_link = file.get('thumbnailLink')
-                    is_mine = file_id in st.session_state.my_uploads
-                    
                     with col:
-                        # Card header with optional delete button for user's own uploads
-                        header_cols = st.columns([0.8, 0.2])
-                        with header_cols[0]:
-                            st.markdown(f"**{file_name[:20]}...**" if len(file_name) > 20 else f"**{file_name}**")
-                        with header_cols[1]:
-                            if is_mine:
-                                if st.button("❌", key=f"del_{file_id}", help="Delete your upload"):
-                                    try:
-                                        drive_service.files().delete(fileId=file_id).execute()
-                                        st.session_state.my_uploads.remove(file_id)
-                                        st.success("Deleted!")
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Error: {e}")
-                        
-                        # Fast native Google Drive thumbnail or video placeholder
-                        if 'image' in mime_type and thumb_link:
-                            # Scales up Drive's default thumbnail size for crisp display
-                            st.image(thumb_link.replace('=s220', '=s400'), use_container_width=True)
-                        elif 'image' in mime_type:
-                            st.info("📷 Image File")
-                        else:
-                            st.info("🎥 Video File")
-                        
-                        # Direct download / view link
-                        st.markdown(f"[📥 Download / Open]({file.get('webViewLink')})", unsafe_allow_html=True)
-                        st.divider()
+                        # Isolate each card in a try-except so a single bad file never crashes the app
+                        try:
+                            file_id = file.get('id')
+                            file_name = file.get('name', 'Memory')
+                            mime_type = file.get('mimeType', '')
+                            thumb_link = file.get('thumbnailLink')
+                            is_mine = file_id in st.session_state.my_uploads
+                            
+                            # Card header with optional delete button for user's own uploads
+                            header_cols = st.columns([0.8, 0.2])
+                            with header_cols[0]:
+                                display_name = file_name[:18] + "..." if len(file_name) > 18 else file_name
+                                st.markdown(f"**{display_name}**")
+                            with header_cols[1]:
+                                if is_mine:
+                                    if st.button("❌", key=f"del_{file_id}", help="Delete your upload"):
+                                        try:
+                                            drive_service.files().delete(fileId=file_id).execute()
+                                            st.session_state.my_uploads.remove(file_id)
+                                            st.success("Deleted!")
+                                            st.rerun()
+                                        except Exception as del_err:
+                                            st.error(f"Error: {del_err}")
+                            
+                            # Thumbnail or placeholder rendering
+                            if 'image' in mime_type and thumb_link:
+                                st.image(thumb_link.replace('=s220', '=s400'), use_container_width=True)
+                            elif 'image' in mime_type:
+                                st.info("📷 Image File")
+                            else:
+                                st.info("🎥 Video File")
+                            
+                            # Direct download link
+                            web_link = file.get('webViewLink', '#')
+                            st.markdown(f"[📥 Download / Open]({web_link})", unsafe_allow_html=True)
+                            st.divider()
+                            
+                        except Exception as card_error:
+                            st.warning(f"Could not load item: {card_error}")
 
         except Exception as e:
             st.error(f"Could not load gallery: {e}")

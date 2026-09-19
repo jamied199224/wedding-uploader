@@ -147,6 +147,12 @@ def update_like_in_sheet(sheets_service, spreadsheet_id, file_id, delta):
             new_count = max(0, delta)
             updated_rows.append([file_id, str(new_count)])
             
+        # Clear existing values first to prevent stale rows
+        sheets_service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range="A:B"
+        ).execute()
+        
         body = {'values': updated_rows}
         sheets_service.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
@@ -200,9 +206,10 @@ spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, 
 
 # --- HANDLE QUERY PARAMS (Delete & Like/Unlike actions) ---
 params = st.query_params
+del_id = params.get("delete_id")
+like_id = params.get("like_id")
 
-if "delete_id" in params and drive_service:
-    del_id = params["delete_id"]
+if del_id and drive_service:
     try:
         drive_service.files().delete(fileId=del_id).execute()
         if del_id in st.session_state.my_uploads:
@@ -222,8 +229,7 @@ if "delete_id" in params and drive_service:
     st.query_params.clear()
     st.rerun()
 
-if "like_id" in params and sheets_service and spreadsheet_id:
-    like_id = params["like_id"]
+if like_id and sheets_service and spreadsheet_id:
     action = params.get("action", "like")
     delta = 1 if action == "like" else -1
     try:
@@ -322,8 +328,9 @@ with tab2:
     st.header("Wedding Gallery")
     
     # --- HANDLE ZIP ARCHIVE CREATION ---
-    if "zip_ids" in params and drive_service:
-        zip_ids = params["zip_ids"].split(",")
+    zip_ids_param = params.get("zip_ids")
+    if zip_ids_param and drive_service:
+        zip_ids = zip_ids_param.split(",")
         with st.spinner(f"Packaging {len(zip_ids)} memories into a ZIP folder..."):
             try:
                 zip_buffer = io.BytesIO()

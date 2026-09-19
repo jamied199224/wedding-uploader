@@ -7,41 +7,59 @@ import socket
 import ssl
 import time
 
+# Page configuration
 st.set_page_config(
     page_title="Jamie & Millie's Wedding Album",
     page_icon="💍",
     layout="wide"
 )
 
+# Target Google Drive Folder
 TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
+# Session state initialization
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
-if 'selected_files' not in st.session_state:
-    st.session_state.selected_files = set()
 
-# CSS for a true Google Photos style 3-column grid with inline thumbnail overlays
+# --- CUSTOM CSS: NATIVE OVERLAY CONTROLS + ZERO-SCROLL MOBILE 3-COLUMN GRID ---
 st.markdown("""
 <style>
+    /* Prevent horizontal page scrolling on mobile viewports */
+    html, body, .stApp, .main, .block-container {
+        overflow-x: hidden !important;
+        max-width: 100vw !important;
+    }
     .main .block-container {
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
-        max-width: 100% !important;
+        padding-left: 0.25rem !important;
+        padding-right: 0.25rem !important;
+        padding-top: 1rem !important;
     }
-    .google-photos-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 4px;
-        width: 100%;
-        margin-bottom: 20px;
+
+    /* Force Streamlit 3-column rows to fit strictly within 100% width */
+    [data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        gap: 3px !important;
+        width: 100% !important;
+        margin-bottom: 3px !important;
     }
+    
+    [data-testid="column"] {
+        position: relative !important;
+        flex: 1 1 0% !important;
+        min-width: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* Square photo card container */
     .photo-card {
         position: relative;
-        background-color: #111;
+        width: 100%;
+        aspect-ratio: 1 / 1;
         border-radius: 4px;
         overflow: hidden;
-        aspect-ratio: 1 / 1;
-        width: 100%;
+        background: #111;
     }
     .photo-card img {
         width: 100%;
@@ -57,7 +75,55 @@ st.markdown("""
         height: 100%;
         background: #222;
         color: white;
-        font-size: 12px;
+        font-size: 11px;
+    }
+    .view-link {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+    }
+
+    /* OVERLAY 1: Top-Left Checkbox */
+    [data-testid="column"] [data-testid="stCheckbox"] {
+        position: absolute !important;
+        top: 4px !important;
+        left: 4px !important;
+        z-index: 10 !important;
+        background: rgba(0, 0, 0, 0.4);
+        border-radius: 50%;
+        padding: 2px !important;
+        margin: 0 !important;
+    }
+    [data-testid="column"] [data-testid="stCheckbox"] label p {
+        display: none !important; /* Hide text label */
+    }
+
+    /* OVERLAY 2: Top-Right Delete Button */
+    [data-testid="column"] [data-testid="stElementContainer"]:has([data-testid="stButton"]) {
+        position: absolute !important;
+        top: 4px !important;
+        right: 4px !important;
+        z-index: 10 !important;
+        width: auto !important;
+    }
+    [data-testid="column"] button {
+        background: rgba(0, 0, 0, 0.6) !important;
+        color: white !important;
+        border: 1px solid rgba(255, 255, 255, 0.8) !important;
+        border-radius: 50% !important;
+        width: 24px !important;
+        height: 24px !important;
+        min-width: 24px !important;
+        min-height: 24px !important;
+        padding: 0 !important;
+        font-size: 11px !important;
+        line-height: 1 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -178,27 +244,9 @@ with tab2:
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                # Top action bar if any items are selected
-                active_selected = list(st.session_state.selected_files)
-                if active_selected:
-                    st.markdown("---")
-                    col_b1, col_b2 = st.columns([0.5, 0.5])
-                    with col_b1:
-                        st.write(f"**{len(active_selected)} items selected**")
-                    with col_b2:
-                        if st.button("📥 Download Selected"):
-                            js_code = ""
-                            for i, fid in enumerate(active_selected):
-                                matched = next((f for f in files if f['id'] == fid), None)
-                                if matched and matched.get('webContentLink'):
-                                    link = matched['webContentLink']
-                                    js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
-                            if js_code:
-                                st.components.v1.html(f"<script>{js_code}</script>", height=0)
-                                st.success("Downloading straight to your device folder...")
-                    st.markdown("---")
-
-                # Render grid layout using Streamlit columns natively so checkboxes live seamlessly right under each photo without page jumps
+                active_selected_links = []
+                
+                # Render photos in rows of 3 columns
                 for i in range(0, len(files), 3):
                     row_files = files[i:i+3]
                     cols = st.columns(3)
@@ -211,42 +259,51 @@ with tab2:
                             web_link = file.get('webViewLink', '#')
                             is_mine = file_id in st.session_state.my_uploads
                             
-                            # Thumbnail container
+                            # 1. Base Thumbnail
                             if 'image' in mime_type and thumb_link:
                                 img_src = thumb_link.replace('=s220', '=s400')
-                                st.markdown(f'''
+                                card_html = f'''
                                 <div class="photo-card">
-                                    <a href="{web_link}" target="_blank" style="position:absolute; width:100%; height:100%; z-index:2;"></a>
+                                    <a href="{web_link}" target="_blank" class="view-link"></a>
                                     <img src="{img_src}" alt="Memory">
                                 </div>
-                                ''', unsafe_allow_html=True)
+                                '''
                             else:
-                                st.markdown(f'''
+                                card_html = f'''
                                 <div class="photo-card">
-                                    <a href="{web_link}" target="_blank" style="position:absolute; width:100%; height:100%; z-index:2;"></a>
+                                    <a href="{web_link}" target="_blank" class="view-link"></a>
                                     <div class="video-badge">▶ Video</div>
                                 </div>
-                                ''', unsafe_allow_html=True)
+                                '''
+                            st.markdown(card_html, unsafe_allow_html=True)
                             
-                            # Compact controls right below each individual thumbnail
-                            c_sel, c_del = st.columns([0.7, 0.3])
-                            with c_sel:
-                                is_checked = st.checkbox("Select", key=f"sel_{file_id}", label_visibility="collapsed")
-                                if is_checked:
-                                    if file_id not in st.session_state.selected_files:
-                                      st.session_state.selected_files.add(file_id)
-                                else:
-                                    if file_id in st.session_state.selected_files:
-                                      st.session_state.selected_files.remove(file_id)
-                            with c_del:
-                                if is_mine:
-                                    if st.button("🗑️", key=f"del_{file_id}", help="Delete your upload"):
-                                        drive_service.files().delete(fileId=file_id).execute()
-                                        if file_id in st.session_state.my_uploads:
-                                            st.session_state.my_uploads.remove(file_id)
-                                        if file_id in st.session_state.selected_files:
-                                            st.session_state.selected_files.remove(file_id)
-                                        st.rerun()
+                            # 2. Overlay Top-Left Checkbox
+                            is_checked = st.checkbox("", key=f"sel_{file_id}", label_visibility="collapsed")
+                            if is_checked and file.get('webContentLink'):
+                                active_selected_links.append(file['webContentLink'])
+                            
+                            # 3. Overlay Top-Right Delete Button (for user's own uploads)
+                            if is_mine:
+                                if st.button("✕", key=f"del_{file_id}", help="Delete photo"):
+                                    drive_service.files().delete(fileId=file_id).execute()
+                                    if file_id in st.session_state.my_uploads:
+                                        st.session_state.my_uploads.remove(file_id)
+                                    st.rerun()
+
+                # Action Bar for Download
+                if active_selected_links:
+                    st.markdown("---")
+                    col_b1, col_b2 = st.columns([0.5, 0.5])
+                    with col_b1:
+                        st.write(f"**{len(active_selected_links)} selected**")
+                    with col_b2:
+                        if st.button("📥 Download Selected"):
+                            js_code = ""
+                            for i, link in enumerate(active_selected_links):
+                                js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
+                            if js_code:
+                                st.components.v1.html(f"<script>{js_code}</script>", height=0)
+                                st.success("Downloading straight to your device folder...")
 
         except Exception as e:
             st.error(f"Google Drive Error: {e}")

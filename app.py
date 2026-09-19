@@ -20,30 +20,30 @@ TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 if 'my_uploads' not in st.session_state:
     st.session_state.my_uploads = []
 
-# --- CUSTOM CSS: FORCE 3 COLUMNS ON MOBILE & GOOGLE PHOTOS STYLE ---
+# --- CUSTOM CSS: FORCE EXACTLY 3 COLUMNS ON PHONES & GOOGLE PHOTOS STYLE ---
 st.markdown("""
 <style>
-    /* Force Streamlit columns to stay 3-across even on mobile screens */
+    /* Force Streamlit columns to stay strictly 3-across on mobile screens */
     [data-testid="column"] {
         width: 33.333% !important;
         flex: 1 1 33.333% !important;
         min-width: 33.333% !important;
-        padding: 3px !important;
+        padding: 2px !important;
     }
     .photo-card {
         position: relative;
         background-color: #111;
-        border-radius: 6px;
+        border-radius: 4px;
         overflow: hidden;
         aspect-ratio: 1 / 1;
-        margin-bottom: 5px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        margin-bottom: 2px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
     }
     .photo-card img {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        border-radius: 6px;
+        border-radius: 4px;
     }
     .video-badge {
         display: flex;
@@ -53,22 +53,22 @@ st.markdown("""
         height: 100%;
         background: #222;
         color: white;
-        font-size: 20px;
-        border-radius: 6px;
+        font-size: 18px;
+        border-radius: 4px;
     }
-    .card-actions {
+    .card-footer {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        font-size: 11px;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
+        padding: 0 2px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- PERSONAL TOUCH: TITLE ---
 st.title("💍 Jamie & Millie's Wedding Album")
-st.write("Welcome! Share your favorite moments and browse the live gallery below.")
+st.write("Welcome! Share your favorite moments and browse live memories below.")
 
 # --- GOOGLE API AUTHENTICATION ---
 @st.cache_resource
@@ -95,11 +95,12 @@ tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
 
 with tab1:
     st.header("Upload Photos & Videos")
-    st.write("Tap below to open your phone's photo library, camera, or files:")
+    st.write("Tap below to open your phone's photo library, camera, or video records:")
     
+    # Explicit mobile media types trigger native iOS/Android camera & gallery selection popups
     uploaded_files = st.file_uploader(
         "Choose files from gallery", 
-        type=None,
+        type=["jpg", "jpeg", "png", "heic", "mp4", "mov"],
         accept_multiple_files=True,
         label_visibility="collapsed"
     )
@@ -173,10 +174,7 @@ with tab2:
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
             else:
-                selected_files = []
-
-                # --- TOP BATCH DOWNLOAD ACTION BAR ---
-                # Check session state for all file selections
+                # --- COLLECT ACTIVE SELECTIONS ---
                 active_selected_links = []
                 for file in files:
                     fid = file['id']
@@ -184,22 +182,23 @@ with tab2:
                         if file.get('webContentLink'):
                             active_selected_links.append(file['webContentLink'])
 
+                # --- TOP BATCH DOWNLOAD ACTION BAR ---
                 if active_selected_links:
                     st.markdown("---")
-                    col_b1, col_b2 = st.columns([0.6, 0.4])
+                    col_b1, col_b2 = st.columns([0.5, 0.5])
                     with col_b1:
-                        st.write(f"**{len(active_selected_links)} items selected**")
+                        st.write(f"**{len(active_selected_links)} selected**")
                     with col_b2:
                         if st.button("📥 Download Selected"):
-                            # Sequential JavaScript trigger to drop files straight into downloads folder
+                            # Sequential JavaScript trigger drops files straight into device downloads folder
                             js_code = ""
                             for i, link in enumerate(active_selected_links):
                                 js_code += f"setTimeout(function(){{ window.open('{link}', '_blank'); }}, {i * 400});"
                             st.components.v1.html(f"<script>{js_code}</script>", height=0)
-                            st.success("Downloading selected items to your device folder...")
+                            st.success("Downloading straight to your device folder...")
                     st.markdown("---")
 
-                # --- 3-COLUMN UNIFORM GRID ---
+                # --- 3-COLUMN UNIFORM GOOGLE PHOTOS GRID ---
                 grid_cols = st.columns(3)
                 for idx, file in enumerate(files):
                     g_col = grid_cols[idx % 3]
@@ -211,7 +210,7 @@ with tab2:
                             web_link = file.get('webViewLink', '#')
                             is_mine = file_id in st.session_state.my_uploads
                             
-                            # Thumbnail Media View (Clicking image opens full view in new tab without downloading)
+                            # Thumbnail Media Preview (Clicking image opens full view in new tab without downloading)
                             if 'image' in mime_type and thumb_link:
                                 img_src = thumb_link.replace('=s220', '=s600')
                                 thumbnail_html = f'''
@@ -225,14 +224,14 @@ with tab2:
                                 thumbnail_html = f'''
                                 <div class="photo-card">
                                     <a href="{web_link}" target="_blank" style="text-decoration:none;">
-                                        <div class="video-badge">▶</div>
+                                        <div class="video-badge">▶ Video</div>
                                     </a>
                                 </div>
                                 '''
                             
                             st.markdown(thumbnail_html, unsafe_allow_html=True)
                             
-                            # Compact selection checkbox and optional delete button right under thumbnail
+                            # Selection checkbox and device-owner delete button
                             act_c1, act_c2 = st.columns([0.7, 0.3])
                             with act_c1:
                                 st.checkbox("Select", key=f"sel_{file_id}", label_visibility="collapsed")

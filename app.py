@@ -1,4 +1,5 @@
 import io
+import json
 import socket
 import ssl
 import time
@@ -23,9 +24,6 @@ st.set_page_config(
 
 TARGET_FOLDER_ID = "1AjLAnQFpX_PMeXBkFPanOCwLcfeUrMJl"
 
-if 'my_uploads' not in st.session_state:
-    st.session_state.my_uploads = []
-
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 
@@ -43,26 +41,164 @@ def get_credentials():
     return creds
 
 def create_drive_service():
-    """Create a fresh Google Drive service with clean SSL socket settings."""
+    """Create a fresh Google Drive service."""
     creds = get_credentials()
     http = httplib2.Http(timeout=120)
     authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
     return build('drive', 'v3', http=authorized_http)
 
+def create_sheets_service():
+    """Create a fresh Google Sheets service."""
+    creds = get_credentials()
+    http = httplib2.Http(timeout=120)
+    authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
+    return build('sheets', 'v4', http=authorized_http)
+
 @st.cache_resource
 def get_google_services():
     try:
-        return create_drive_service()
+        drive = create_drive_service()
+        sheets = create_sheets_service()
+        return drive, sheets
     except Exception as e:
         st.error(f"Failed to authenticate with Google: {e}")
+        return None, None
+
+def get_or_create_likes_spreadsheet(drive_service, sheets_service, folder_id):
+    """Find or create the Google Sheet used to store like counts with network retries."""
+    query = f"'{folder_id}' in parents and name='wedding_likes_db' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+    
+    for attempt in range(3):
+        try:
+            res = drive_service.files().list(q=query, fields="files(id)").execute()
+            files = res.get('files', [])
+            
+            if files:
+                return files[0]['id']
+                
+            spreadsheet_body = {
+                'properties': {'title': 'wedding_likes_db'}
+            }
+            sheet = sheets_service.spreadsheets().create(body=spreadsheet_body, fields='spreadsheetId').execute()
+            sheet_id = sheet.get('spreadsheetId')
+            
+            file_obj = drive_service.files().get(fileId=sheet_id, fields='parents').execute()
+            previous_parents = ",".join(file_obj.get('parents', []))
+            drive_service.files().update(
+                fileId=sheet_id,
+                addParents=folder_id,
+                removeParents=previous_parents,
+                fields='id, parents'
+            ).execute()
+            
+            return sheet_id
+        except Exception as e:
+            if attempt == 2:
+                return None
+            time.sleep(2)
+    return None
+
+def load_likes_from_sheet(sheets_service, spreadsheet_id):
+    """Load all file IDs and their like counts from the Google Sheet."""
+    for attempt in range(3):
+        try:
+            result = sheets_service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range="A:B"
+            ).execute()
+            rows = result.get('values', [])
+            likes_dict = {}
+            for row in rows:
+                if len(row) >= 1:
+                    fid = row[0]
+                    count_str = row[1] if len(row) > 1 else "0"
+                    try:
+                        likes_dict[fid] = int(count_str)
+                    except ValueError:
+                        likes_dict[fid] = 0
+            return likes_dict
+        except Exception as e:
+            if attempt == 2:
+                return {}
+            time.sleep(1.5)
+    return {}
+
+def update_like_in_sheet(sheets_service, spreadsheet_id, file_id, delta):
+    """Atomically update a specific file's like count in the Google Sheet."""
+    try:
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range="A:B"
+        ).execute()
+        rows = result.get('values', [])
+        
+        found = False
+        new_count = 0
+        updated_rows = []
+        
+        for row in rows:
+            if len(row) >= 1 and row[0] == file_id:
+                found = True
+                try:
+                    cur = int(row[1]) if len(row) > 1 else 0
+                except ValueError:
+                    cur = 0
+                new_count = max(0, cur + delta)
+                updated_rows.append([file_id, str(new_count)])
+            else:
+                if len(row) > 0:
+                    updated_rows.append(row)
+                
+        if not found:
+            new_count = max(0, delta)
+            updated_rows.append([file_id, str(new_count)])
+            
+        sheets_service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range="A:Z"
+        ).execute()
+        
+        if updated_rows:
+            body = {'values': updated_rows}
+            sheets_service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range="A1",
+                valueInputOption="RAW",
+                body=body
+            ).execute()
+        return new_count
+    except Exception as e:
         return None
 
+def remove_file_from_sheet(sheets_service, spreadsheet_id, file_id):
+    """Remove a file's record from the Google Sheet when deleted."""
+    try:
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range="A:B"
+        ).execute()
+        rows = result.get('values', [])
+        new_rows = [r for r in rows if len(r) > 0 and r[0] != file_id]
+        sheets_service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range="A:Z"
+        ).execute()
+        if new_rows:
+            body = {'values': new_rows}
+            sheets_service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range="A1",
+                valueInputOption="RAW",
+                body=body
+            ).execute()
+    except Exception as e:
+        pass
+
 def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
-    """Upload large files reliably using requests to avoid httplib2 redirect issues."""
+    """Upload files reliably using resumable requests."""
     creds = get_credentials()
     headers = {"Authorization": f"Bearer {creds.token}"}
     
-    # Step 1: Initiate resumable upload session
     init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
     init_headers = {
         **headers,
@@ -83,7 +219,6 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
     if not upload_url:
         raise Exception("Upload session missing Location header from Google Drive.")
         
-    # Step 2: Upload file bytes to session URL
     put_headers = {
         "Content-Type": mime_type,
         "Content-Length": str(len(file_bytes))
@@ -95,31 +230,64 @@ def upload_file_to_drive(file_bytes, file_name, mime_type, folder_id):
     else:
         raise Exception(f"Upload failed ({upload_res.status_code}): {upload_res.text}")
 
-drive_service = get_google_services()
+drive_service, sheets_service = get_google_services()
+spreadsheet_id = get_or_create_likes_spreadsheet(drive_service, sheets_service, TARGET_FOLDER_ID) if (drive_service and sheets_service) else None
 
-# --- HANDLE QUERY PARAMS (Delete actions) ---
+if drive_service and sheets_service and not spreadsheet_id:
+    st.warning("⚠️ Warning: Could not locate or create 'wedding_likes_db' Google Sheet in the target folder. Likes may not persist.")
+
+# --- HANDLE QUERY PARAMS (Delete, Like, & ZIP actions) ---
 params = st.query_params
+del_id = params.get("delete_id")
+like_id = params.get("like_id")
 
-if "delete_id" in params and drive_service:
-    del_id = params["delete_id"]
+if del_id and drive_service:
     try:
         drive_service.files().delete(fileId=del_id).execute()
-        if del_id in st.session_state.my_uploads:
-            st.session_state.my_uploads.remove(del_id)
+        if spreadsheet_id and sheets_service:
+            remove_file_from_sheet(sheets_service, spreadsheet_id, del_id)
         st.success("Memory deleted!")
     except Exception as e:
         st.error(f"Delete failed: {e}")
-    del st.query_params["delete_id"]
+    st.query_params.clear()
     st.rerun()
 
+if like_id and sheets_service and spreadsheet_id:
+    action = params.get("action", "like")
+    delta = 1 if action == "like" else -1
+    try:
+        update_like_in_sheet(sheets_service, spreadsheet_id, like_id, delta)
+    except Exception as e:
+        st.error(f"Like update failed: {e}")
+    st.query_params.clear()
+    st.rerun()
+
+# --- TAB MEMORY VIA QUERY PARAMS & SESSION STATE ---
+if "tab" in params:
+    if params["tab"] == "gallery":
+        st.session_state.nav_tab = "🖼️ Gallery"
+    elif params["tab"] == "upload":
+        st.session_state.nav_tab = "📤 Upload Memories"
+
+if "nav_tab" not in st.session_state:
+    st.session_state.nav_tab = "📤 Upload Memories"
+
 st.title("💍 Jamie & Millie's Wedding Album")
-st.write("Welcome! Share your favorite moments and browse live memories below.")
+st.write("Welcome! Share your favorite memories and browse the live gallery below.")
+st.caption("✨ Tap photo to open | Tap heart to like | Double tap photo to like")
 
-tab1, tab2 = st.tabs(["📤 Upload Memories", "🖼️ Gallery"])
+# Navigation radio acting as stateful tabs that remember your place
+nav_selection = st.radio(
+    "Navigation", 
+    ["📤 Upload Memories", "🖼️ Gallery"], 
+    horizontal=True, 
+    key="nav_tab",
+    label_visibility="collapsed"
+)
 
-with tab1:
+if nav_selection == "📤 Upload Memories":
     st.header("Upload Photos & Videos")
-    st.write("Tap below to choose files from your phone library or camera:")
+    st.write("Choose files from your phone library or camera:")
     
     if "upload_msg" in st.session_state:
         st.success(st.session_state.upload_msg)
@@ -145,6 +313,9 @@ with tab1:
                 success_count = 0
                 failed_files = []
                 
+                clean_guest_name = guest_name.strip() if guest_name and guest_name.strip() else "Guest"
+                newly_uploaded_ids = []
+                
                 for index, uploaded_file in enumerate(uploaded_files):
                     file_raw = uploaded_file.getvalue()
                     file_size_mb = len(file_raw) / (1024 * 1024)
@@ -153,7 +324,7 @@ with tab1:
                     uploaded_successfully = False
                     last_err = None
                     
-                    file_title = f"{guest_name or 'Guest'}_{uploaded_file.name}"
+                    file_title = f"{clean_guest_name}_{uploaded_file.name}"
                     mime_type = uploaded_file.type or 'application/octet-stream'
 
                     for attempt in range(3):
@@ -164,8 +335,10 @@ with tab1:
                                 mime_type, 
                                 TARGET_FOLDER_ID
                             )
-                            if file_id and file_id not in st.session_state.my_uploads:
-                                st.session_state.my_uploads.append(file_id)
+                            if file_id:
+                                newly_uploaded_ids.append(file_id)
+                                if spreadsheet_id and sheets_service:
+                                    update_like_in_sheet(sheets_service, spreadsheet_id, file_id, 0)
                             uploaded_successfully = True
                             success_count += 1
                             break
@@ -186,16 +359,19 @@ with tab1:
                         st.write(f"- **{fname}**: {err}")
                 
                 if success_count > 0:
+                    st.session_state.new_uploads = newly_uploaded_ids
                     st.session_state.upload_msg = f"Successfully uploaded {success_count} of {total_files} memories!"
                     st.session_state.uploader_key += 1
+                    st.session_state.nav_tab = "🖼️ Gallery"  # Switch to gallery tab automatically on upload
                     st.rerun()
 
-with tab2:
+else:
     st.header("Wedding Gallery")
     
     # --- HANDLE ZIP ARCHIVE CREATION ---
-    if "zip_ids" in params and drive_service:
-        zip_ids = params["zip_ids"].split(",")
+    zip_ids_param = params.get("zip_ids")
+    if zip_ids_param and drive_service:
+        zip_ids = zip_ids_param.split(",")
         with st.spinner(f"Packaging {len(zip_ids)} memories into a ZIP folder..."):
             try:
                 zip_buffer = io.BytesIO()
@@ -217,7 +393,7 @@ with tab2:
                                     zf.writestr(file_name, res.content)
                                     break
                                 else:
-                                    raise Exception(f"HTTP {res.status_code}: {res.text[:100]}")
+                                    raise Exception(f"HTTP {res.status_code}")
                             except Exception as dl_err:
                                 if attempt == 2:
                                     st.warning(f"Could not include file {fid} in ZIP: {dl_err}")
@@ -237,33 +413,29 @@ with tab2:
                     )
                 with col_z2:
                     if st.button("Close / Done"):
-                        del st.query_params["zip_ids"]
+                        st.query_params.clear()
                         st.rerun()
                 st.markdown("---")
             except Exception as e:
                 st.error(f"Error creating ZIP: {e}")
 
-    if drive_service:
+    if drive_service and sheets_service:
         try:
-            query = f"'{TARGET_FOLDER_ID}' in parents and trashed=false"
-            results = None
+            query = f"'{TARGET_FOLDER_ID}' in parents and name != 'wedding_likes_db' and trashed=false"
+            results = drive_service.files().list(
+                q=query,
+                pageSize=100,
+                fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
+                orderBy="createdTime desc"
+            ).execute()
             
-            for attempt in range(3):
-                try:
-                    active_service = drive_service if attempt == 0 else create_drive_service()
-                    results = active_service.files().list(
-                        q=query,
-                        pageSize=100,
-                        fields="files(id, name, webViewLink, webContentLink, thumbnailLink, mimeType)",
-                        orderBy="createdTime desc"
-                    ).execute()
-                    break
-                except (ssl.SSLError, socket.error, Exception) as net_err:
-                    if attempt == 2:
-                        raise net_err
-                    time.sleep(1)
-            
-            files = results.get('files', []) if results else []
+            files = results.get('files', [])
+            likes_dict = load_likes_from_sheet(sheets_service, spreadsheet_id) if spreadsheet_id else {}
+
+            recent_uploads_json = "[]"
+            if "new_uploads" in st.session_state:
+                recent_uploads_json = json.dumps(st.session_state.new_uploads)
+                del st.session_state.new_uploads
 
             if not files:
                 st.info("No photos or videos uploaded yet. Be the first!")
@@ -271,27 +443,38 @@ with tab2:
                 html_items = []
                 for file in files:
                     fid = file.get('id')
+                    raw_title = file.get('name', '')
                     mime = file.get('mimeType', '')
                     thumb_small = file.get('thumbnailLink', '').replace('=s220', '=s400')
                     full_image = file.get('thumbnailLink', '').replace('=s220', '=s1600')
                     preview_url = f"https://drive.google.com/file/d/{fid}/preview"
-                    is_mine = fid in st.session_state.my_uploads
                     is_video = 'video' in mime or 'mp4' in mime or 'mov' in mime
+                    
+                    likes_count = int(likes_dict.get(fid, 0))
+                    
+                    if '_' in raw_title:
+                        uploader_name = raw_title.split('_', 1)[0].strip()
+                    else:
+                        uploader_name = 'Guest'
+                    if not uploader_name:
+                        uploader_name = 'Guest'
                     
                     if not is_video and thumb_small:
                         media_content = f'<img src="{thumb_small}" alt="Photo" />'
                     else:
                         media_content = '<div class="video-label">▶ Video</div>'
-                    
-                    delete_html = f'<button class="delete-btn" title="Delete Photo" onclick="deleteItem(event, \'{fid}\')">✕</button>' if is_mine else ''
                         
                     html_items.append(f'''
-                    <div class="grid-card">
+                    <div class="grid-card" id="card-{fid}" data-fid="{fid}">
                         <input type="checkbox" class="select-check" data-id="{fid}" onclick="updateCount(event)" />
-                        {delete_html}
-                        <div class="card-link" onclick="openModal('{full_image}', '{preview_url}', {'true' if is_video else 'false'})">
+                        <button class="like-btn" id="like-btn-{fid}" title="Like memory" onclick="toggleLike(event, \'{fid}\')">
+                            ❤️ <span id="like-count-{fid}">{likes_count}</span>
+                        </button>
+                        <button class="delete-btn" id="del-btn-{fid}" title="Delete Photo" onclick="deleteItem(event, \'{fid}\')" style="display:none;">🗑️</button>
+                        <div class="card-link" onclick="handleCardClick(event, \'{fid}\', \'{full_image}\', \'{preview_url}\', {'true' if is_video else 'false'})">
                             {media_content}
                         </div>
+                        <div class="uploader-tag">Added by {uploader_name}</div>
                     </div>
                     ''')
 
@@ -303,11 +486,10 @@ with tab2:
                     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
                     body {{ background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
                     
-                    /* FIXED 3-COLUMN MOBILE GRID */
                     .gallery-grid {{
                         display: grid !important;
                         grid-template-columns: repeat(3, 1fr) !important;
-                        gap: 4px !important;
+                        gap: 6px !important;
                         width: 100% !important;
                     }}
                     
@@ -316,9 +498,11 @@ with tab2:
                         width: 100%;
                         aspect-ratio: 1 / 1;
                         background: #111;
-                        border-radius: 4px;
+                        border-radius: 6px;
                         overflow: hidden;
                         cursor: pointer;
+                        user-select: none;
+                        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
                     }}
                     
                     .card-link {{
@@ -340,15 +524,32 @@ with tab2:
                         justify-content: center;
                         height: 100%;
                         color: #fff;
-                        font-size: 11px;
+                        font-size: 12px;
                         background: #222;
+                        font-weight: 500;
                     }}
                     
-                    /* TOP-LEFT OVERLAY: CHECKBOX */
+                    .uploader-tag {{
+                        position: absolute;
+                        bottom: 0;
+                        left: 0;
+                        right: 0;
+                        background: rgba(0, 0, 0, 0.75);
+                        color: #ffffff;
+                        font-size: 10px;
+                        padding: 4px 6px;
+                        text-align: center;
+                        white-space: nowrap;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        pointer-events: none;
+                        z-index: 5;
+                    }}
+                    
                     .select-check {{
                         position: absolute;
-                        top: 6px;
-                        left: 6px;
+                        top: 8px;
+                        left: 8px;
                         z-index: 10;
                         width: 22px;
                         height: 22px;
@@ -356,16 +557,58 @@ with tab2:
                         cursor: pointer;
                     }}
 
-                    /* TOP-RIGHT OVERLAY: DELETE BUTTON */
+                    .like-btn {{
+                        position: absolute;
+                        top: 8px;
+                        left: 50%;
+                        transform: translateX(-50%);
+                        z-index: 10;
+                        background: rgba(0, 0, 0, 0.65);
+                        border: 1px solid rgba(255, 255, 255, 0.8);
+                        border-radius: 12px;
+                        color: #ffffff;
+                        font-size: 11px;
+                        padding: 3px 8px;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        gap: 3px;
+                        line-height: 1;
+                        font-family: inherit;
+                        transition: transform 0.15s ease, background 0.15s ease;
+                    }}
+                    
+                    .like-btn.liked {{
+                        background: rgba(225, 29, 72, 0.9);
+                        border-color: #ff4d6d;
+                        transform: translateX(-50%) scale(1.08);
+                    }}
+
+                    @keyframes heartBurst {{
+                        0% {{ opacity: 1; transform: translate(-50%, -50%) scale(0.3); }}
+                        50% {{ opacity: 1; transform: translate(-50%, -80%) scale(1.5); }}
+                        100% {{ opacity: 0; transform: translate(-50%, -120%) scale(2.0); }}
+                    }}
+
+                    .pop-heart {{
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        font-size: 42px;
+                        pointer-events: none;
+                        z-index: 25;
+                        animation: heartBurst 0.65s cubic-bezier(0.17, 0.89, 0.32, 1.28) forwards;
+                    }}
+
                     .delete-btn {{
                         position: absolute;
-                        top: 6px;
-                        right: 6px;
+                        top: 8px;
+                        right: 8px;
                         z-index: 10;
-                        width: 22px;
-                        height: 22px;
+                        width: 24px;
+                        height: 24px;
                         border-radius: 50%;
-                        background: rgba(0, 0, 0, 0.65);
+                        background: rgba(0, 0, 0, 0.7);
                         border: 1px solid rgba(255, 255, 255, 0.8);
                         color: white;
                         font-size: 11px;
@@ -375,16 +618,16 @@ with tab2:
                         justify-content: center;
                     }}
                     
-                    /* ACTION BAR */
                     .action-bar {{
-                        margin-top: 12px;
-                        padding: 10px 14px;
+                        margin-top: 14px;
+                        padding: 10px 16px;
                         background: #1e1e1e;
                         border-radius: 8px;
                         display: flex;
                         align-items: center;
                         justify-content: space-between;
                         color: #fff;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
                     }}
                     
                     .dl-btn {{
@@ -414,8 +657,134 @@ with tab2:
                     </div>
 
                     <script>
+                        let clickTimers = {{}};
+                        let tapCounts = {{}};
+
+                        function getMyUploads() {{
+                            try {{
+                                return JSON.parse(window.localStorage.getItem('my_wedding_uploads') || '[]');
+                            }} catch(e) {{
+                                return [];
+                            }}
+                        }}
+
+                        function getLikedItems() {{
+                            try {{
+                                return JSON.parse(window.localStorage.getItem('liked_wedding_photos') || '[]');
+                            }} catch(e) {{
+                                return [];
+                            }}
+                        }}
+
+                        function setLikedItems(items) {{
+                            try {{
+                                window.localStorage.setItem('liked_wedding_photos', JSON.stringify(items));
+                            }} catch(e) {{}}
+                        }}
+
+                        function initApp() {{
+                            let mine = getMyUploads();
+                            const newlyUploaded = {recent_uploads_json};
+                            if (newlyUploaded && newlyUploaded.length > 0) {{
+                                newlyUploaded.forEach(id => {{
+                                    if (!mine.includes(id)) mine.push(id);
+                                }});
+                                try {{
+                                    window.localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
+                                }} catch(e) {{}}
+                            }}
+
+                            mine.forEach(fid => {{
+                                const delBtn = document.getElementById('del-btn-' + fid);
+                                if (delBtn) delBtn.style.display = 'flex';
+                            }});
+
+                            const liked = getLikedItems();
+                            liked.forEach(fid => {{
+                                const btn = document.getElementById('like-btn-' + fid);
+                                if (btn) btn.classList.add('liked');
+                            }});
+                        }}
+
+                        initApp();
+
+                        // Form submission helper guarantees top-level navigation, no loops, AND passes &tab=gallery to keep you on the gallery tab
+                        function submitTopNavigation(queryString) {{
+                            const topWin = window.top || window.parent;
+                            const cleanBase = topWin.location.href.split('?')[0].split('#')[0];
+                            
+                            const form = topWin.document.createElement('form');
+                            form.method = 'GET';
+                            form.action = cleanBase + queryString + '&tab=gallery';
+                            form.target = '_top';
+                            topWin.document.body.appendChild(form);
+                            form.submit();
+                        }}
+
+                        function toggleLike(e, fid) {{
+                            if (e) e.stopPropagation();
+
+                            const card = document.getElementById('card-' + fid);
+                            const countSpan = document.getElementById('like-count-' + fid);
+                            const likeBtn = document.getElementById('like-btn-' + fid);
+
+                            let likedList = getLikedItems();
+                            const alreadyLiked = likedList.includes(fid);
+                            let action = "like";
+
+                            if (!alreadyLiked) {{
+                                likedList.push(fid);
+                                setLikedItems(likedList);
+                                action = "like";
+
+                                if (card) {{
+                                    const burst = document.createElement('div');
+                                    burst.className = 'pop-heart';
+                                    burst.innerText = '❤️';
+                                    card.appendChild(burst);
+                                    setTimeout(() => burst.remove(), 650);
+                                }}
+                                if (likeBtn) likeBtn.classList.add('liked');
+                                if (countSpan) {{
+                                    const cur = parseInt(countSpan.innerText || '0');
+                                    countSpan.innerText = cur + 1;
+                                }}
+                            }} else {{
+                                likedList = likedList.filter(id => id !== fid);
+                                setLikedItems(likedList);
+                                action = "unlike";
+
+                                if (likeBtn) likeBtn.classList.remove('liked');
+                                if (countSpan) {{
+                                    const cur = parseInt(countSpan.innerText || '0');
+                                    countSpan.innerText = Math.max(0, cur - 1);
+                                }}
+                            }}
+
+                            setTimeout(() => {{
+                                submitTopNavigation('?like_id=' + fid + '&action=' + action + '&_t=' + Date.now());
+                            }}, 300);
+                        }}
+
+                        function handleCardClick(e, fid, fullImg, previewUrl, isVideo) {{
+                            if (e) e.stopPropagation();
+                            
+                            tapCounts[fid] = (tapCounts[fid] || 0) + 1;
+
+                            if (tapCounts[fid] === 1) {{
+                                clickTimers[fid] = setTimeout(() => {{
+                                    tapCounts[fid] = 0;
+                                    openModal(fullImg, previewUrl, isVideo);
+                                }}, 260);
+                            }} else if (tapCounts[fid] === 2) {{
+                                clearTimeout(clickTimers[fid]);
+                                tapCounts[fid] = 0;
+                                toggleLike(null, fid);
+                            }}
+                        }}
+
                         function openModal(fullImg, previewUrl, isVideo) {{
-                            const parentWin = window.parent;
+                            const parentWin = window.top || window.parent;
                             const parentDoc = parentWin.document;
                             
                             parentWin.closeWeddingModal = function() {{
@@ -435,7 +804,6 @@ with tab2:
                                 parentDoc.body.appendChild(overlay);
                             }}
 
-                            // Close on backdrop click
                             overlay.onclick = function(e) {{
                                 if (e.target === overlay) {{
                                     parentWin.closeWeddingModal();
@@ -444,7 +812,6 @@ with tab2:
 
                             overlay.innerHTML = '';
 
-                            // Create distinct Close Button element directly in parent window
                             const closeBtn = parentDoc.createElement('button');
                             closeBtn.id = 'wedding-modal-close-btn';
                             closeBtn.innerHTML = '✕';
@@ -498,14 +865,19 @@ with tab2:
                                 ids.push(cb.getAttribute('data-id'));
                             }});
                             if (ids.length > 0) {{
-                                window.parent.location.search = '?zip_ids=' + ids.join(',');
+                                submitTopNavigation('?zip_ids=' + ids.join(','));
                             }}
                         }}
 
                         function deleteItem(e, fid) {{
                             if (e) e.stopPropagation();
                             if (confirm("Delete this photo from the album?")) {{
-                                window.parent.location.search = '?delete_id=' + fid;
+                                let mine = getMyUploads();
+                                mine = mine.filter(id => id !== fid);
+                                try {{
+                                    window.localStorage.setItem('my_wedding_uploads', JSON.stringify(mine));
+                                }} catch(e) {{}}
+                                submitTopNavigation('?delete_id=' + fid);
                             }}
                         }}
                     </script>
@@ -514,9 +886,8 @@ with tab2:
                 '''
                 
                 grid_rows = (len(files) + 2) // 3
-                calculated_height = (grid_rows * 130) + 80
+                calculated_height = (grid_rows * 145) + 90
                 st.components.v1.html(gallery_html, height=calculated_height, scrolling=False)
 
         except Exception as e:
             st.error(f"Google Drive Error: {e}")
-
